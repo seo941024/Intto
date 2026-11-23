@@ -16,8 +16,10 @@
   --seam cut              띠 양 끝을 섞지 않고 가장 비슷한 세로 경로에서 잘라 잇고, 장식이 없는 줄에서 띠를 시작한다
   --cut                   장식을 경계선에서 이만큼 떨어진 줄부터 뗀다. 장식끼리 땅 위에서 이어져 한 덩어리가 되면 키운다
   --ceil-tall             천장 장식만 따로 떼는 기준. 아주 크게 주면 천장에서는 떼지 않는다
+  --ceil-solid            천장 속 무늬를 이 줄 위에서만 뜬다. 외곽선 있는 띠를 옮겨 붙여 꽉 찬 끝 근처에 외곽선이 섞일 때
 사용
-  python tools/art/make_terrain.py art_inbox/cloud_terrain_v1.webp --theme cloud --floor-pct 80 --tall 10 --cut 4 --ceil-tall 9999 --seam cut
+  python tools/art/compose_ceiling.py
+  python tools/art/make_terrain.py art_inbox/cloud_terrain_v2.png --theme cloud --floor-pct 80 --tall 10 --cut 4 --ceil-tall 9999 --seam cut --ceil-solid 62
   python tools/art/make_terrain.py art_inbox/mushroom_terrain_v1.png --theme mushroom --ceil-pct 15 --floor-pct 85 --ceil-grow --ceil-body 510:1150 --seam cut
   python tools/art/make_terrain.py art_inbox/storm_terrain_v1.png --theme storm --floor-pct 85 --ceil-tall 9999 --cut 16 --seam cut
 """
@@ -38,7 +40,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[2]
 RES = 1440
-ART_SCALE = 1.2  # 땅 그림을 키우는 배율. 지형 경계선은 그대로
+ART_SCALE = 2 / 3  # 땅 그림 배율. 카메라가 1.5배 당겨 보므로 2/3이면 받은 그림이 화면에서 원래 비율 그대로 보인다. 지형 경계선은 그대로
 K = 960 / 1672 * RES / 960 * ART_SCALE  # 시안 크기 → res 1440 그림 크기
 OVERLAP = 160  # 좌우 이음 폭, 원본 픽셀
 TALL = 24  # 경계선에서 이만큼 넘게 튀어나온 덩어리는 장식으로 뗀다, 원본 픽셀
@@ -185,6 +187,7 @@ def main():
     ap.add_argument("--ceil-pct", type=float, default=50, help="천장 경계선: 열마다 잰 천장 아래 끝 높이의 백분위. 50이면 중간값")
     ap.add_argument("--floor-pct", type=float, default=50, help="바닥 경계선: 열마다 잰 바닥 위 끝 높이의 백분위. 50이면 중간값")
     ap.add_argument("--ceil-grow", action="store_true", help="천장 장식이 띠 속에 묻힌 부분까지 색으로 찾아 통째로 뗀다")
+    ap.add_argument("--ceil-solid", type=int, help="천장 속 무늬를 뜨는 아래 끝 줄. 주지 않으면 천장이 모든 열에서 꽉 찬 끝")
     ap.add_argument("--ceil-body", help="천장 속 무늬로 쓸 원본 가로 범위 X0:X1. 묻힌 버섯 줄기처럼 무늬에 되풀이되면 안 되는 것을 피한다")
     ap.add_argument("--seam", choices=["blend", "cut"], default="blend",
                     help="띠 양 끝 잇기: blend 섞기, cut 가장 비슷한 선에서 잘라 잇고 장식이 없는 줄에서 띠를 시작")
@@ -199,6 +202,9 @@ def main():
     ceil_bottom = np.array([np.nonzero(alpha[:mid, x])[0].max() if alpha[:mid, x].any() else 0 for x in range(w)])
     floor_top = np.array([np.nonzero(alpha[mid:, x])[0].min() + mid if alpha[mid:, x].any() else h for x in range(w)])
     c_solid = int(ceil_bottom.min())  # 이 줄 위로는 천장이 꽉 차 있다
+    if args.ceil_solid is not None:
+        assert args.ceil_solid <= c_solid, f"--ceil-solid는 꽉 찬 끝 {c_solid}보다 얕아야 한다"
+        c_solid = args.ceil_solid
     c_line = int(np.percentile(ceil_bottom, args.ceil_pct))
     c_end = int(ceil_bottom.max()) + 4
     f_start = int(floor_top.min()) - 4
@@ -206,25 +212,31 @@ def main():
     f_solid = int(floor_top.max())  # 이 줄 아래로는 바닥이 꽉 차 있다
     print(f"천장 꽉 찬 끝 {c_solid}, 경계선 {c_line}, 아래 끝 {c_end} / 바닥 위 끝 {f_start}, 경계선 {f_line}, 꽉 찬 시작 {f_solid}")
 
-    # 테두리 띠: 좌우를 이은 뒤 줄인다
+    # 테두리 띠와 속 무늬는 한 번에 좌우를 이어 같은 열에서 자른다. 게임은 속 무늬를 원본에서의 깊이에 맞춰 띠 뒤에 깔아,
+    # 띠가 흐려지는 자리 뒤로 같은 그림이 이어진다. 따로 이으면 무늬가 어긋나 블록이 두 겹으로 겹쳐 보인다
     join = seamless_cut if args.seam == "cut" else seamless
-    ceil_edge = join(keyed[0:c_end], OVERLAP)
-    ceil_edge = fade(ceil_edge, 14, top=True)
     floor_cut = f_solid + 70
-    floor_edge = join(keyed[f_start:floor_cut], OVERLAP)
-    floor_edge = fade(floor_edge, 18, top=False)
+    ceil_all = join(keyed[0:c_end], OVERLAP)
+    floor_all = join(keyed[f_start:h], OVERLAP)
     if args.seam == "cut":
-        ceil_edge, cx0 = roll_clear(ceil_edge, c_line, up=False)
-        floor_edge, fx0 = roll_clear(floor_edge, f_line - f_start, up=True)
+        _, cx0 = roll_clear(ceil_all, c_line, up=False)
+        _, fx0 = roll_clear(floor_all[:floor_cut - f_start], f_line - f_start, up=True)
+        ceil_all = np.roll(ceil_all, -cx0, axis=1)
+        floor_all = np.roll(floor_all, -fx0, axis=1)
         print(f"띠 시작 줄 천장 {cx0}, 바닥 {fx0}")
-    # 속 무늬: 꽉 찬 부분만 잘라 좌우·위아래로 잇는다
-    def span(v):
-        if not v:
-            return slice(None)
-        a, b = (int(t) for t in v.split(":"))
-        return slice(a, b)
-    ceil_body = tile_vertical(join(keyed[0:c_solid, span(args.ceil_body)], OVERLAP), 18)
-    floor_body = tile_vertical(join(keyed[f_solid + 40:h], OVERLAP), 18)
+    ceil_edge = fade(ceil_all.copy(), 14, top=True)
+    floor_edge = fade(floor_all[:floor_cut - f_start].copy(), 18, top=False)
+    # 속 무늬: 띠가 꽉 찬 곳에서 조금 더 안쪽부터 잘라 위아래로 잇는다.
+    # 천장은 c_body_end 줄 위, 바닥은 f_body_start 줄 아래. tile_vertical이 위 18줄을 떼므로 바닥 무늬 첫 줄은 그 18줄 아래다
+    c_body_end = c_solid - 10
+    f_body_start = f_solid + 30
+    if args.ceil_body:
+        # 원본의 다른 가로 범위에서 뜬 무늬라 띠와 열이 맞지 않는다. 띠가 흐려지는 맨 위에서만 보인다
+        a, b = (int(v) for v in args.ceil_body.split(":"))
+        ceil_body = tile_vertical(join(keyed[0:c_body_end, a:b], OVERLAP), 18)
+    else:
+        ceil_body = tile_vertical(ceil_all[0:c_body_end].copy(), 18)
+    floor_body = tile_vertical(floor_all[f_body_start - f_start:].copy(), 18)
     ceil_body[..., 3] = 255
     floor_body[..., 3] = 255
     # 키 큰 장식을 떼어 낸다
@@ -298,8 +310,8 @@ def main():
         old_img.save(backup / "tiles.png")
         (backup / "tiles.json").write_text(json.dumps(old_def, ensure_ascii=False, indent=2), encoding="utf-8")
     sheet.save(folder / "tiles.png")
-    # 속 무늬를 깔기 시작하는 깊이: 경계선에서 띠가 모든 줄에서 꽉 차는 곳보다 조금 더 안쪽, res 픽셀
-    body_gap = {"floor": round((f_solid + 10 - f_line) * K, 1), "ceil": round((c_line - c_solid + 10) * K, 1)}
+    # 속 무늬를 깔기 시작하는 깊이, res 픽셀. 무늬 첫 줄이 원본에서 놓였던 깊이 그대로라 띠와 같은 그림이 겹친다
+    body_gap = {"floor": round((f_body_start + 18 - f_line) * K, 1), "ceil": round((c_line - c_body_end) * K, 1)}
     spec = {"image": "tiles.png", "res": RES, "animations": anims, "decor": decor, "bodyGap": body_gap}
     (folder / "tiles.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
     for n in order:

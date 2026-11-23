@@ -145,7 +145,7 @@ def main():
         "animations": anims,
     }
     if (out / "trail.json").exists():
-        # make_particles.py가 만든 날갯짓 부스러기를 계속 쓰도록 이름을 남긴다
+        # make_fx.py가 만든 날갯짓 부스러기를 계속 쓰도록 이름을 남긴다
         spec["trail"] = "trail.json"
     (out / "sprite.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 

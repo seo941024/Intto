@@ -26,6 +26,7 @@
       <header class="topbar">
         <img class="logo-sm" src="/assets/ui/logo.png" alt="인또">
         <span class="me" id="lobby-me"></span>
+        <button id="btn-home" class="pix-btn small">처음으로</button>
       </header>
       <div class="lobby-grid">
         <div class="panel rooms">
@@ -44,8 +45,8 @@
           <ul class="rules">
             <li>제한 시간 2분 30초, 가장 멀리 난 사람이 1위</li>
             <li>보석은 점수, 기술 아이콘을 먹으면 그 기술을 하나 들고 쓰기</li>
-            <li>지형에 부딪히면 생명 하나, 둘 다 잃으면 유령</li>
-            <li>유령은 상대에게 붙어 HP 절반을 빼앗아 부활</li>
+            <li>지형에 부딪히면 생명 하나, 둘 다 잃으면 탈락</li>
+            <li>탈락하면 유령으로 같이 날거나 관전하기</li>
             <li>HP는 계속 줄어드니 붕어빵으로 채우기</li>
           </ul>
         </div>
@@ -94,6 +95,15 @@
         <div id="game-chat">
           <div id="game-chat-log" class="chat-log float"></div>
           <input id="game-chat-in" class="pix-input" maxlength="80" autocomplete="off">
+        </div>
+        <div id="ghost-choice" class="ghost-choice hidden">
+          <div class="panel ghost-box">
+            <h2>탈락 · 거리 기록 끝</h2>
+            <div class="row">
+              <button id="btn-ghost-fly" class="pix-btn">유령으로 같이 날기</button>
+              <button id="btn-ghost-watch" class="pix-btn primary">관전하기</button>
+            </div>
+          </div>
         </div>
         <div id="result" class="result hidden">
           <div class="panel result-box">

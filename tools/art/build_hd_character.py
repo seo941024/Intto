@@ -9,7 +9,7 @@
   --fly-frames 로 나는 모습 4프레임이 가로로 놓인 그림을 주면 나는 프레임은 그 그림을 쓴다
            크기는 첫 그림의 나는 자세 폭에 맞추고, 아래쪽 몸이 겹치도록 위치만 맞춘다. 맞은 모습과 유령은 첫 그림 그대로
 카메라가 1.5배 당겨 보므로 res 1440으로 넣어 화면에서 1:1로 그려지게 한다.
-출력 public/assets/characters/<id>/sheet.png, sprite.json, portrait.png
+출력 public/assets/characters/<id>/sheet.png, sprite.json. 대기실 초상은 make_portraits.py
 사용
   python tools/art/build_hd_character.py art_inbox/mongsil_v2.webp --id mongsil --mode wings \
       --back-box 0.49,0.37
@@ -363,13 +363,7 @@ def main():
         spec["trail"] = "trail.json"
     (out / "sprite.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 대기실 초상 96×96: 나는 자세 원본에서 머리 쪽을 정사각으로
-    src = poses[0]
-    side = min(src.height, round(src.width * 0.62))
-    crop = src.crop((src.width - side, 0, src.width, side))
-    por = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
-    por.alpha_composite(resize(crop, 92 / side), (2, 2))
-    por.save(out / "portrait.png")
+    # 대기실 초상은 make_portraits.py가 흰 테두리 얼굴로 따로 만든다
     print(f"{args.id}: 프레임 {len(frames)}개 {fw}×{fh}, 기준점 ({ax}, {ay}), 나는 자세 폭 {fly[1].shape[1]}")
 
 

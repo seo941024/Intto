@@ -272,7 +272,6 @@ io.on('connection', (socket) => {
   socket.on('race:pickup', (id) => race()?.onPickup(me.id, id));
   socket.on('race:grab', (id) => race()?.onGrab(me.id, id));
   socket.on('race:skill', () => race()?.onSkill(me.id));
-  socket.on('race:latch', () => race()?.onLatch(me.id));
   socket.on('race:lifeLost', (d) => race()?.onLifeLost(me.id, d));
   socket.on('race:nice', (i) => race()?.onNice(me.id, i));
   socket.on('race:final', () => race()?.onFinal(me.id));

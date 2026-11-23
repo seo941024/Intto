@@ -1,28 +1,27 @@
 {
   "image": "trail.png",
-  "res": 960,
-  "frameWidth": 12,
-  "frameHeight": 12,
+  "res": 2880,
   "animations": {
     "trail": {
       "frames": [
-        0,
-        1,
-        2,
-        3
+        [
+          0,
+          0,
+          36,
+          34
+        ]
       ],
-      "fps": 8,
       "anchor": [
-        6,
-        6
+        18,
+        17
       ]
     }
   },
   "emit": {
     "flyFrame": 2,
     "at": [
-      -26,
-      -7
+      -22,
+      -6
     ],
     "lifeMs": 900
   }

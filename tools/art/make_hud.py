@@ -30,7 +30,10 @@ INBOX = ROOT / "art_inbox"
 UI = ROOT / "public" / "assets" / "ui"
 PART_K = 0.28
 DIGIT_H = {"S": 14, "M": 30, "L": 36}  # 숫자 0의 높이, 게임 픽셀
-FLAG_H = 40  # 골 깃발 높이, 게임 픽셀
+FLAG_H = 44  # 골 깃발 높이, 게임 픽셀
+FACE_H = 36  # 진행 막대 얼굴 높이, 게임 픽셀
+FACE_ORDER = ["mongsil", "kkangdong", "doto", "palang"]  # 그림 윗줄 왼쪽부터
+FACES_SRC = INBOX / "hud_faces_flag_v1.png"
 PART_NAMES = ["heartFull", "heartEmpty", "hpFrame", "hpFillSrc", "timerPlate",
               "rankRow1", "rankRow2", "rankRow3", "rankRow4", "slotFrame", "slotActive", "miniBar"]
 DIGIT_NAMES = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "colon", "m"]
@@ -132,6 +135,20 @@ def red(img):
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
+def faces_and_flags():
+    """흰 테두리 얼굴·깃발 그림에서 윗줄 얼굴 넷과 아랫줄 깃발 프레임을 원본 크기 그대로 떼어 낸다.
+    얼굴은 캐릭터 id별로 돌려준다. 대기실 초상도 같은 얼굴을 쓴다"""
+    from import_scene import pieces
+    fk = unkey(np.array(Image.open(FACES_SRC).convert("RGB")))
+    rows = np.nonzero((fk[..., 3] > 128).any(1))[0]
+    gaps = [y for y in range(rows.min(), rows.max()) if not (fk[y, :, 3] > 128).any()]
+    mid = gaps[len(gaps) // 2]
+    real = lambda ps: [Image.fromarray(np.clip(q, 0, 255).astype(np.uint8), "RGBA") for q in ps if (q[..., 3] > 128).sum() > 500]
+    faces = real(pieces(fk[:mid], min_gap=20))
+    flags = real(pieces(fk[mid:], min_gap=20))
+    return dict(zip(FACE_ORDER, faces)), flags
+
+
 def main():
     parts_k = unkey(np.array(Image.open(INBOX / "hud_parts_v1.png").convert("RGB")))
     digits_k = unkey(np.array(Image.open(INBOX / "hud_digits_v1.png").convert("RGB")))
@@ -156,20 +173,21 @@ def main():
     # 진행 막대 채움: 같은 채움 그림을 노랗게 칠해 진행 막대 안쪽에 맞춘다
     mini_rect, mfill = fit_fill(parts["miniBar"], parts["hpFillSrc"])
     put("miniFill", tint(mfill, (214, 120, 20), (255, 236, 120)))
-    # 골 깃발: 받은 그림이 있으면 펄럭이는 프레임으로 싣는다
-    flag_src = INBOX / "hud_goal_v1.png"
-    if flag_src.exists():
-        fk = unkey(np.array(Image.open(flag_src).convert("RGB")))
-        from import_scene import pieces
-        frames = [Image.fromarray(np.clip(p, 0, 255).astype(np.uint8), "RGBA") for p in pieces(fk, min_gap=20) if (p[..., 3] > 128).sum() > 500]
-        fh = max(f.height for f in frames)
-        fwid = max(f.width for f in frames)
+    # 얼굴 넷과 골 깃발: 윗줄은 진행 막대 얼굴, 아랫줄은 펄럭이는 깃발 4프레임. 모두 흰 테두리가 둘러진 그림
+    if FACES_SRC.exists():
+        faces, flags = faces_and_flags()
+        for cid, f in faces.items():
+            img = scaled(f, FACE_H / f.height)
+            anims[f"face_{cid}"] = {"frames": [p.add(img)], "anchor": [img.width // 2, img.height // 2]}
+        fh = max(f.height for f in flags)
+        fwid = max(f.width for f in flags)
         rects = []
-        for f in frames[:4]:
+        for f in flags[:4]:
             c = Image.new("RGBA", (fwid, fh), (0, 0, 0, 0))
             c.alpha_composite(f, (0, fh - f.height))
             rects.append(p.add(scaled(c, FLAG_H / fh)))
-        anims["goalFlag"] = {"frames": rects, "fps": 8, "anchor": [0, rects[0][3]]}
+        anims["goalFlag"] = {"frames": rects, "fps": 8, "anchor": [round(rects[0][2] * 0.1), rects[0][3]]}
+        print(f"  얼굴 {len(faces)}개, 깃발 {len(flags)}프레임")
 
     # 숫자 세 크기. 모두 0의 높이를 기준으로 같은 배율
     ref_h = digits["0"].height

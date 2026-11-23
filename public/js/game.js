@@ -17,6 +17,8 @@ const Z = RULES.cameraZoom || 1;
 const VW = W / Z;
 const VH = H / Z;
 const WH = RULES.worldH; // 맵 세로 크기
+// 배경에 덮는 안개: 색, 먼 배경 위 진하기, 가까운 섬 위 진하기. 폭풍협곡은 밝게 빛나는 번개·수정이 잘 보이게 어두운 남색
+const HAZE = { default: ['214, 236, 255', 0.18, 0.2], storm: ['16, 14, 46', 0.28, 0.25] };
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // 글씨는 모두 갈무리 굵은 글꼴. 맵 위 글씨는 1.5배로 당겨 보이므로 13px, 화면 위 HUD 글씨는 18px
 const FONT = '18px Galmuri11B';
@@ -63,11 +65,9 @@ function lowerBound(arr, x) {
 export class Game {
   constructor(canvas, init, myId, hooks) {
     this.canvas = canvas;
-    // 그림 해상도는 규칙의 화면 크기를 따른다. HTML에 적힌 크기와 어긋나면 화면 일부가 잘린다
-    canvas.width = W;
-    canvas.height = H;
     this.ctx = canvas.getContext('2d');
-    this.ctx.imageSmoothingEnabled = false;
+    this.S = 1;
+    this.fitCanvas();
     this.init = init;
     this.myId = myId;
     this.hooks = hooks;
@@ -130,6 +130,23 @@ export class Game {
     for (const [el, ev, fn, o] of this.domHandlers) el.removeEventListener(ev, fn, o);
   }
 
+  // 그림은 늘 960×540 기준 좌표로 그리고, 캔버스는 화면에 보이는 크기 그대로의 실제 픽셀로 둔다.
+  // 작은 캔버스를 창 크기로 늘리면 픽셀이 1칸·2칸으로 고르지 않게 커져 깨져 보이므로 S배로 바로 그린다
+  fitCanvas() {
+    const c = this.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.max(W, Math.round((c.clientWidth || W) * dpr));
+    const ch = Math.round((cw * H) / W);
+    if (c.width !== cw || c.height !== ch) {
+      c.width = cw;
+      c.height = ch;
+    }
+    this.S = cw / W;
+    // 그림은 큰 원본을 줄여 만든 것이라 부드럽게 늘리고 줄인다
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = 'high';
+  }
+
   // ── 준비 ──
   prepareWorld() {
     const t = this.world.tiles;
@@ -137,16 +154,9 @@ export class Game {
     // 지형 그림은 원래 크기로 두고 그릴 때 줄인다. 카메라가 당겨 보면 화면에서 1:1로 선명하게 그려진다
     const ek = t.k;
     this.edgeK = ek;
-    const pattern = (c) => {
-      const p = ctx.createPattern(c, 'repeat');
-      p.setTransform(new DOMMatrix().scaleSelf(ek, ek));
-      return p;
-    };
-    const cb = t.toCanvas('ceilBody', true);
-    const fb = t.toCanvas('floorBody', true);
-    this.ceilPattern = cb ? pattern(cb) : '#262b44';
-    this.floorPattern = fb ? pattern(fb) : '#262b44';
-    // 띠 타일은 4 맵 단위 폭 세로줄로 잘라 지형 경계선을 따라 붙인다
+    // 속 무늬와 띠 타일은 땅을 따라 기울인 조각으로 잘라 붙인다
+    this.ceilBody = t.toCanvas('ceilBody', true);
+    this.floorBody = t.toCanvas('floorBody', true);
     this.ceilEdge = t.toCanvas('ceilEdge', true);
     this.floorEdge = t.toCanvas('floorEdge', true);
     this.ceilEdgeAy = (t.frame('ceilEdge')?.ay || 0) * ek;
@@ -224,20 +234,11 @@ export class Game {
       sfx.hit();
       if (L.hp <= 0) this.loseLife('drain');
     });
-    this.on('race:revive', (d) => {
-      const L = this.L;
-      if (!L.ghost || L.dead) return;
-      L.ghost = false;
-      L.lives = 1;
-      L.hp = Math.min(L.maxHp, d.hp);
-      L.invUntil = performance.now() + 1500;
-      this.addFx('revive', L.x, L.y, 500);
-      sfx.revive();
-    });
     this.on('race:event', (d) => this.onEvent(d));
     this.on('race:end', (d) => {
       if (this.ended) return;
       this.ended = true;
+      this.hooks.onGhostEnd && this.hooks.onGhostEnd();
       this.input.up = false;
       this.input.boost = false;
       sfx.end();
@@ -274,8 +275,12 @@ export class Game {
       const k = e.code;
       if (k === 'ArrowUp' || k === 'KeyW') this.input.up = true;
       else if (k === 'Space') this.input.boost = true;
-      else if (this.L.dead && ['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(k)) {
-        if (!e.repeat) this.cycleSpec(k === 'ArrowLeft' || k === 'KeyA' ? -1 : 1);
+      else if ((this.L.dead || this.L.ghost) && ['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(k)) {
+        // 유령이면 관전으로 넘어가고, 관전 중이면 볼 사람을 바꾼다
+        if (!e.repeat) {
+          if (this.L.dead) this.cycleSpec(k === 'ArrowLeft' || k === 'KeyA' ? -1 : 1);
+          else this.watch();
+        }
       } else if ((k === 'ArrowRight' || k === 'KeyD') && !e.repeat) this.action();
       else return;
       e.preventDefault();
@@ -293,7 +298,7 @@ export class Game {
 
   // 탈락한 뒤 볼 수 있는 사람. 순위 순서
   specList() {
-    return this.standings().filter((s) => !s.dead && s.p.id !== this.myId && s.p._view);
+    return this.standings().filter((s) => !s.dead && !s.ghost && s.p.id !== this.myId && s.p._view);
   }
 
   // 탈락한 뒤 ←→로 볼 사람을 바꾼다
@@ -316,13 +321,12 @@ export class Game {
     return { lives: L.lives, hp: L.hp, maxHp: L.maxHp, ghost: L.ghost, dead: L.dead, dist: Math.max(0, (L.x - L.ghostDist) / RULES.pxPerMeter), feathers: L.feathers, slot: this.slot, ch: this.ch };
   }
 
-  // 오른쪽 버튼: 살아 있으면 기술, 유령이면 붙기
+  // 오른쪽 버튼: 든 기술 쓰기
   action() {
     if (this.ended || this.raceT() < 0) return;
     const L = this.L;
-    if (L.dead) return;
-    if (L.ghost) socket.emit('race:latch');
-    else if (this.slot > 0) socket.emit('race:skill');
+    if (L.dead || L.ghost) return;
+    if (this.slot > 0) socket.emit('race:skill');
   }
 
   raceT() {
@@ -381,8 +385,8 @@ export class Game {
 
     // 지형
     if (!dashing && circleHitsTerrain(this.map, L.x, L.y, r)) {
-      if (L.ghost) return this.finalOut();
-      if (now < L.invUntil) this.pushInside(r);
+      // 유령은 다치지 않고 땅 안쪽으로 밀려나기만 한다
+      if (L.ghost || now < L.invUntil) this.pushInside(r);
       else if (L.shield) {
         L.shield = false;
         L.invUntil = now + 600;
@@ -432,7 +436,7 @@ export class Game {
 
     // 보석·회복·깃털
     if (!L.ghost) {
-      const reach = (r + 15) ** 2;
+      const reach = (r + 12) ** 2;
       const gems = this.map.gems;
       for (let i = lowerBound(gems, L.x - 30); i < gems.length && gems[i].x < L.x + 30; i++) {
         const g = gems[i];
@@ -468,7 +472,7 @@ export class Game {
       for (let i = lowerBound(sk, L.x - 30); i < sk.length && sk[i].x < L.x + 30; i++) {
         const it = sk[i];
         if (this.grabbed.has(it.id)) continue;
-        if ((it.x - L.x) ** 2 + (it.y - L.y) ** 2 < (r + 19) ** 2) {
+        if ((it.x - L.x) ** 2 + (it.y - L.y) ** 2 < (r + 16) ** 2) {
           this.grabbed.add(it.id);
           socket.emit('race:grab', it.id);
           this.addFx('pickup', it.x, it.y, 260, 'fx');
@@ -566,11 +570,17 @@ export class Game {
     this.addFx('hit', L.x, L.y, 320);
     this.shakeUntil = now + 300;
     for (const k of Object.keys(L.eff)) L.eff[k] = 0;
+    // 목숨 둘을 다 잃으면 탈락. 거리 기록은 여기서 끝나고, 유령으로 같이 날지 관전할지 고른다
     if (L.lives <= 0) {
       L.ghost = true;
       L.hp = 0;
       L.shield = false;
       sfx.ghost();
+      socket.emit('race:final');
+      // 혼자 남은 사람이 탈락하면 서버가 곧바로 레이스를 끝낸다. 그때는 고르는 창을 띄우지 않는다
+      setTimeout(() => {
+        if (!this.ended && L.ghost && !L.dead) this.hooks.onGhost && this.hooks.onGhost();
+      }, 400);
     } else {
       L.hp = L.maxHp;
       L.invUntil = now + RULES.lifeLostInvulnMs;
@@ -579,14 +589,13 @@ export class Game {
     this.recenter();
   }
 
-  finalOut() {
+  // 유령이 관전으로 넘어간다. 기록은 유령이 될 때 이미 끝났다
+  watch() {
     const L = this.L;
     if (L.dead) return;
     L.dead = true;
     L.ghost = false;
-    socket.emit('race:final');
-    this.addFx('hit', L.x, L.y, 320);
-    sfx.lifeLost();
+    this.hooks.onGhostEnd && this.hooks.onGhostEnd();
   }
 
   sendState(ts) {
@@ -675,7 +684,6 @@ export class Game {
       if (pos) this.popups.push({ img: 'kill', x: pos.x, y: pos.y - 45, t0: now, dur: 1000 });
       if (d.by === this.myId) sfx.kill();
     } else if (d.type === 'crash') text = `${name(d.target)} 충돌, 남은 생명 ${Math.max(0, d.lv)}`;
-    else if (d.type === 'revive') text = `${name(d.by)} 부활`;
     else if (d.type === 'out') text = `${name(d.target)} 탈락`;
     else if (d.type === 'left') text = `${name(d.target)} 나감`;
     else if (d.type === 'nice' && d.target !== this.myId) text = `${name(d.target)} NICE`;
@@ -742,7 +750,8 @@ export class Game {
       }
     }
     // 가로는 캐릭터를 화면 왼쪽 cameraLead 자리에 두고, 세로는 캐릭터를 부드럽게 따라가되 맵 위아래 끝에서 멈춘다
-    const camX = Math.round((t < 0 ? 0 : focus.x) - RULES.cameraLead / Z);
+    // 카메라는 칸 단위로 끊지 않고 매끄럽게 따라간다. 칸 단위로 끊으면 빠를 때 화면이 떨려 보인다
+    const camX = (t < 0 ? 0 : focus.x) - RULES.cameraLead / Z;
     const wantY = clamp(focus.y - VH / 2, 0, Math.max(0, WH - VH));
     this.camY = this.camY == null || t < 0 ? wantY : this.camY + (wantY - this.camY) * Math.min(1, dt * 5);
     let shakeX = 0;
@@ -755,11 +764,13 @@ export class Game {
     this.camX = camX;
     const tw = Math.max(0, t);
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.fitCanvas();
+    const S = this.S;
+    ctx.setTransform(S, 0, 0, S, 0, 0);
     ctx.clearRect(0, 0, W, H);
     this.drawBackground(camX * Z);
 
-    ctx.setTransform(Z, 0, 0, Z, Math.round(-camX * Z) + shakeX, Math.round(-this.camY * Z) + shakeY);
+    ctx.setTransform(Z * S, 0, 0, Z * S, (-camX * Z + shakeX) * S, (-this.camY * Z + shakeY) * S);
     this.drawTerrain(camX);
     this.drawObstacles(camX, tw, now);
     this.drawItems(camX, tw);
@@ -770,7 +781,7 @@ export class Game {
     this.drawFx(now);
     this.drawPopups(now);
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.setTransform(S, 0, 0, S, 0, 0);
     this.drawParticles((camX - prevCam) * Z, now);
     if (!L.dead && !L.ghost && now < L.eff.blind) this.drawFog(now);
     this.drawHud(t, now);
@@ -780,13 +791,18 @@ export class Game {
     const ctx = this.ctx;
     const w = this.world;
     if (w.sky) ctx.drawImage(w.sky, 0, 0, Math.round(w.sky.width * w.k.sky), Math.round(w.sky.height * w.k.sky));
-    for (const [img, f, k] of [[w.far, 0.15, w.k.far], [w.mid, 0.4, w.k.mid]]) {
-      if (!img) continue;
-      const iw = Math.round(img.width * k);
-      const ih = Math.round(img.height * k);
-      const off = -(((Math.round(camX * f) % iw) + iw) % iw);
-      ctx.drawImage(img, off, 0, iw, ih);
-      ctx.drawImage(img, off + iw, 0, iw, ih);
+    // 먼 배경일수록 옅은 하늘색 안개를 더 덮는다. 앞에 그리는 땅과 장애물이 배경과 섞이지 않고 도드라진다
+    const [hc, hFar, hMid] = HAZE[this.theme] || HAZE.default;
+    for (const [img, f, k, haze] of [[w.far, 0.15, w.k.far, hFar], [w.mid, 0.4, w.k.mid, hMid]]) {
+      if (img) {
+        const iw = Math.round(img.width * k);
+        const ih = Math.round(img.height * k);
+        const off = -(((Math.round(camX * f) % iw) + iw) % iw);
+        ctx.drawImage(img, off, 0, iw, ih);
+        ctx.drawImage(img, off + iw, 0, iw, ih);
+      }
+      ctx.fillStyle = `rgba(${hc}, ${haze})`;
+      ctx.fillRect(0, 0, W, H);
     }
   }
 
@@ -795,24 +811,9 @@ export class Game {
     const tiles = this.world.tiles;
     const x0 = Math.floor(camX / 4) * 4 - 4;
     const x1 = camX + VW + 8;
-    const cols = [];
-    for (let x = x0; x < x1; x += 4) {
-      const tb = terrainAt(this.map, x + 2);
-      cols.push([x, Math.round(tb.top), Math.round(tb.bottom)]);
-    }
-    // 속 무늬는 띠가 꽉 찬 깊이부터 깐다. 경계선 바로 밑부터 깔면 띠의 울퉁불퉁한 틈으로 비쳐 보인다
-    const gap = tiles.def.bodyGap || { floor: 0, ceil: 0 };
-    const gf = Math.round(gap.floor * this.edgeK);
-    const gc = Math.round(gap.ceil * this.edgeK);
-    ctx.fillStyle = this.ceilPattern;
-    for (const [x, t] of cols) ctx.fillRect(x, -8, 4, t - gc + 8);
-    ctx.fillStyle = this.floorPattern;
-    for (const [x, , b] of cols) ctx.fillRect(x, b + gf, 4, WH - b - gf + 8);
     const ce = this.ceilEdge;
     const fe = this.floorEdge;
     const ek = this.edgeK;
-    const sw = 4 / ek;
-    const src = (img, x) => Math.min(img.width - sw, (((x / ek) % img.width) + img.width) % img.width);
     // 띠에서 떼어 낸 키 큰 장식은 조각내지 않고 그 가운데 땅 높이에 통째로 세운다.
     // 장식 밑의 띠도 같은 높이로 맞춰, 기울어진 땅에서 장식과 띠에 남은 밑동이 어긋나지 않게 한다
     const RAMP = 16; // 장식 양옆 이 폭에서 띠가 다시 땅 높이로 돌아간다, 맵 단위
@@ -843,14 +844,97 @@ export class Game {
         hs += w * p.h;
         wmax = Math.max(wmax, w);
       }
-      return ws ? Math.round(h + (hs / ws - h) * wmax) : h;
+      return ws ? h + (hs / ws - h) * wmax : h;
     };
-    for (const [x, t, b] of cols) {
-      if (ce) ctx.drawImage(ce, src(ce, x), 0, sw, ce.height, x, pinned(pins.ceil, x + 2, t) - this.ceilEdgeAy, 4, ce.height * ek);
-      if (fe) ctx.drawImage(fe, src(fe, x), 0, sw, fe.height, x, pinned(pins.floor, x + 2, b) - this.floorEdgeAy, 4, fe.height * ek);
+    // 지형 표본은 4 맵 단위마다 있고 그 사이는 직선이다. 표본마다 위아래 높이를 잰다
+    const pts = [];
+    for (let x = x0; x <= x1 + 4; x += 4) {
+      const tb = terrainAt(this.map, x);
+      pts.push([x, pinned(pins.ceil, x, tb.top), pinned(pins.floor, x, tb.bottom)]);
     }
-    for (const p of pins.floor) tiles.draw(ctx, p.d.name, Math.round(p.x), Math.round(p.h - p.d.dy * ek));
-    for (const p of pins.ceil) tiles.draw(ctx, p.d.name, Math.round(p.x), Math.round(p.h + p.d.dy * ek));
+    // 직선 조각마다 그림을 세로로 기울여 붙인다. 세로줄을 계단처럼 올리고 내리면 블록 윗면 같은 직선이 깨진다.
+    // 기울기가 거의 같은 이웃 표본은 한 조각으로 묶어 그리는 횟수를 줄인다
+    const segs = (idx) => {
+      const out = [];
+      for (let i = 0; i < pts.length - 1; ) {
+        const [xs, , ] = pts[i];
+        const ys = pts[i][idx];
+        let j = i + 1;
+        while (j + 1 < pts.length && pts[j + 1][0] - xs <= 64) {
+          const s = (pts[j + 1][idx] - ys) / (pts[j + 1][0] - xs);
+          let ok = true;
+          for (let k = i + 1; k <= j; k++) {
+            if (Math.abs(ys + s * (pts[k][0] - xs) - pts[k][idx]) > 0.25) {
+              ok = false;
+              break;
+            }
+          }
+          if (!ok) break;
+          j++;
+        }
+        const xe = pts[j][0];
+        out.push([xs, ys, (pts[j][idx] - ys) / (xe - xs), xe - xs]);
+        i = j;
+      }
+      return out;
+    };
+    const base = ctx.getTransform();
+    const tilt = (xs, ys, slope) => ctx.setTransform(base.a, base.d * slope, 0, base.d, base.e + base.a * xs, base.f + base.d * ys);
+    // 그림의 세계 x 위치에 맞는 열부터 w 폭만큼, 기울인 좌표의 (0, v)에 h 높이로 그린다. 그림 끝을 넘으면 처음으로 이어 그린다
+    const strip = (img, wx, w, v, h) => {
+      const iw = img.width;
+      let sx = (((wx / ek) % iw) + iw) % iw;
+      let left = w / ek;
+      let u = 0;
+      while (left > 0.001) {
+        const take = Math.min(left, iw - sx);
+        ctx.drawImage(img, sx, 0, take, img.height, u, v, take * ek, h);
+        u += take * ek;
+        left -= take;
+        sx = 0;
+      }
+    };
+    const SEAM = 0.6; // 이웃 조각과 이만큼 겹쳐 그려 틈이 안 보이게 한다, 맵 단위
+    // 속 무늬는 원본에서 놓였던 깊이에 띠와 같은 열로 깐다. 띠가 흐려지는 자리 뒤로 같은 그림이 이어진다
+    const gap = tiles.def.bodyGap || { floor: 0, ceil: 0 };
+    const gf = gap.floor * ek;
+    const gc = gap.ceil * ek;
+    const cs = segs(1);
+    const fs = segs(2);
+    const cb = this.ceilBody;
+    const fb = this.floorBody;
+    if (cb) {
+      const bh = cb.height * ek;
+      for (const [xs, ys, slope, w] of cs) {
+        tilt(xs, ys, slope);
+        const reach = -8 - Math.max(ys, ys + slope * w);
+        for (let v = -gc - bh; v + bh > reach; v -= bh) strip(cb, xs, w + SEAM, v, bh + 0.5);
+      }
+    }
+    if (fb) {
+      const bh = fb.height * ek;
+      for (const [xs, ys, slope, w] of fs) {
+        tilt(xs, ys, slope);
+        const reach = WH + 8 - Math.min(ys, ys + slope * w);
+        for (let v = gf; v < reach; v += bh) strip(fb, xs, w + SEAM, v, bh + 0.5);
+      }
+    }
+    if (ce) {
+      for (const [xs, ys, slope, w] of cs) {
+        tilt(xs, ys, slope);
+        strip(ce, xs, w + SEAM, -this.ceilEdgeAy, ce.height * ek);
+      }
+    }
+    if (fe) {
+      for (const [xs, ys, slope, w] of fs) {
+        tilt(xs, ys, slope);
+        strip(fe, xs, w + SEAM, -this.floorEdgeAy, fe.height * ek);
+      }
+    }
+    ctx.setTransform(base);
+    // 장식은 띠와 같은 높이에 반올림 없이 세운다
+    for (const p of pins.floor) tiles.draw(ctx, p.d.name, p.x, p.h - p.d.dy * ek);
+    for (const p of pins.ceil) tiles.draw(ctx, p.d.name, p.x, p.h + p.d.dy * ek);
   }
 
   drawObstacles(camX, t, now) {
@@ -905,13 +989,13 @@ export class Game {
       if (this.grabbed.has(it.id)) continue;
       const y = it.y + Math.round(Math.sin(t * 2.4 + it.id) * 2);
       ctx.beginPath();
-      ctx.arc(it.x, y, 18, 0, Math.PI * 2);
+      ctx.arc(it.x, y, 15, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
       ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
       ctx.stroke();
-      ART.hud.draw(ctx, 'icon_' + this.ch.skills[it.slot - 1], it.x, y, { scale: 0.75 });
+      ART.hud.draw(ctx, 'icon_' + this.ch.skills[it.slot - 1], it.x, y, { scale: 0.62 });
     }
     for (const f of this.map.feathers) {
       if (f.x < camX - 16 || f.x > camX + VW + 16 || this.featherTaken.has(f.id)) continue;
@@ -962,22 +1046,23 @@ export class Game {
     const x = Math.round(d.x);
     const y = Math.round(d.y);
     const blink = d.e.includes('i') && Math.floor(now / 90) % 2 === 0;
-    if (d.e.includes('d')) ART.fx.draw(ctx, 'dash', x - 40, y, { t, scale: 1.2 });
+    if (d.e.includes('d')) ART.fx.draw(ctx, 'dash', x - 33, y, { t });
     const alpha = d.ghost ? 0.78 : blink ? 0.35 : d.self ? 1 : 0.92;
     const anim = atlas.has(d.anim) ? d.anim : 'fly';
     const at = t + d.p.color * 0.21;
     const sc = d.small ? 0.5 : 1;
     // 가속 바람줄은 몸 뒤에서 뻗어 나가도록 캐릭터보다 먼저 그린다
     if (anim === 'boost' && !d.ghost && ART.particles?.has('streak')) {
-      ART.particles.draw(ctx, 'streak', x - 17 * sc, y - 18 * sc, { t, scale: sc * 1.2, alpha });
+      ART.particles.draw(ctx, 'streak', x - 14 * sc, y - 15 * sc, { t, scale: sc, alpha });
     }
     this.emitCrumb(d, atlas, anim, at, now, sc);
     atlas.draw(ctx, anim, x, y, { t: at, alpha, scale: sc });
-    if (d.shield) ART.fx.draw(ctx, 'shield', x, y, { t, alpha: 0.85, scale: 1.2 });
+    if (d.shield) ART.fx.draw(ctx, 'shield', x, y, { t, alpha: 0.85 });
 
     // 머리 위: 이름, 상태, 번개 조준
-    let iy = y - 42;
-    if (this.boltWarn.has(d.p.id) && now < this.boltWarn.get(d.p.id)) ART.fx.draw(ctx, 'warn', x, y, { t });
+    let iy = y - 34;
+    // 번개가 나를 노리면 머리 오른쪽 위에 느낌표
+    if (this.boltWarn.has(d.p.id) && now < this.boltWarn.get(d.p.id)) ART.fx.draw(ctx, 'warn', x + 26, y - 20, { t });
     const icons = [];
     for (const [c, n] of [['b', 'debuff_blind'], ['h', 'debuff_heavy'], ['s', 'debuff_shake'], ['w', 'debuff_slow'], ['g', 'buff_glide'], ['m', 'buff_shrink']]) {
       if (d.e.includes(c)) icons.push(n);
@@ -985,7 +1070,7 @@ export class Game {
     if (icons.length) {
       let ix = x - (icons.length * 20) / 2 + 9;
       for (const n of icons) {
-        ART.ui.draw(ctx, n, ix, iy);
+        ART.fx.draw(ctx, n, ix, iy);
         ix += 20;
       }
       iy -= 18;
@@ -994,7 +1079,7 @@ export class Game {
       ctx.font = FONT_SMALL;
       this.text(d.p.name, x, iy - 12, PLAYER_COLORS[d.p.color], 'center');
     } else if (this.players.size > 1) {
-      ART.ui.draw(ctx, 'miniMarker' + d.p.color, x, iy - 2);
+      ART.fx.draw(ctx, 'miniMarker' + d.p.color, x, iy - 2);
     }
     this.drawBubble(d.p.id, x, iy - 17, now);
   }
@@ -1110,7 +1195,10 @@ export class Game {
         continue;
       }
       const n = atlas.frameCount(f.name) || 1;
-      atlas.draw(this.ctx, f.name, x, y, { index: Math.min(n - 1, Math.floor((s * 1000 * n) / f.dur)) });
+      // 한 장짜리 효과는 끝 무렵에 흐려지며 사라진다
+      const k = (s * 1000) / f.dur;
+      const alpha = n === 1 && k > 0.6 ? Math.max(0, (1 - k) / 0.4) : 1;
+      atlas.draw(this.ctx, f.name, x, y, { index: Math.min(n - 1, Math.floor(k * n)), alpha });
     }
   }
 
@@ -1279,12 +1367,12 @@ export class Game {
       const ds = hud.size('digitS_0');
       this.drawNum(`${i + 1}`, x + bx, y + by - Math.round(ds.h / 2), 'S', 'center');
       this.drawNum(`${Math.floor(s.dist)}`, x + rs.w - 9, y + Math.round((rs.h - ds.h) / 2), 'S', 'right');
-      const ca = ART.chars[s.p.charId];
-      const cf = ca && ca.frame('fly');
-      const cx = x - 18;
-      if (cf) ca.draw(ctx, s.ghost && ca.has('ghost') ? 'ghost' : 'fly', cx, y + rs.h / 2 + 4, { index: 0, scale: (rs.h + 2) / (cf.sh * ca.k) });
+      // 판 왼쪽에 진행 막대와 같은 흰 테두리 얼굴. 유령이면 흐리게
+      const cx = x - 28;
+      const face = 'face_' + s.p.charId;
+      if (hud.has(face)) hud.draw(ctx, face, cx, y + Math.round(rs.h / 2), { scale: 0.9, alpha: s.ghost ? 0.55 : 1 });
       if (s.dead) ui.drawAt(ctx, 'skull', cx - Math.round(ui.size('skull').w / 2), y + Math.round((rs.h - ui.size('skull').h) / 2));
-      let nx = x - 38;
+      let nx = x - 56;
       if (this.init.mode === 'team' && s.p.team) {
         const tw = ui.size('teamA').w;
         ui.drawAt(ctx, s.p.team === 'A' ? 'teamA' : 'teamB', nx - tw, y + Math.round((rs.h - ui.size('teamA').h) / 2));
@@ -1325,12 +1413,14 @@ export class Game {
     const [px, py, pw, ph] = hud.def.miniFillRect || [10, 7, bs.w - 20, bs.h - 14];
     const prog = clamp(Math.max(0, t) / (RULES.raceMs / 1000), 0, 1);
     if (prog > 0) this.drawFill('miniFill', mx + px, my + py, prog);
-    if (hud.has('goalFlag')) hud.draw(ctx, 'goalFlag', mx + bs.w - 10, my + Math.round(bs.h / 2) + 6, { t: now / 1000 });
-    const face = ART.portraits[(this.spectating || this.me).charId];
-    if (face) {
-      const fs = 34;
-      ctx.drawImage(face, Math.round(mx + px + pw * prog - fs / 2), Math.round(my + bs.h / 2 - fs / 2), fs, fs);
-    }
+    // 골 깃발: 얼굴이 닿는 막대 끝에 깃대를 세운다
+    if (hud.has('goalFlag')) hud.draw(ctx, 'goalFlag', mx + px + pw - 3, my + py + ph + 3, { t: now / 1000 });
+    // 얼굴은 흰 테두리 얼굴 그림, 없으면 대기실 초상
+    const cid = (this.spectating || this.me).charId;
+    const fx0 = Math.round(mx + px + pw * prog);
+    const fy0 = Math.round(my + bs.h / 2);
+    if (hud.has('face_' + cid)) hud.draw(ctx, 'face_' + cid, fx0, fy0);
+    else if (ART.portraits[cid]) ctx.drawImage(ART.portraits[cid], fx0 - 17, fy0 - 17, 34, 34);
 
     // 소식
     ctx.font = FONT_HUD;
@@ -1345,7 +1435,7 @@ export class Game {
     // 안내
     ctx.font = FONT;
     const hintY = sy - 52;
-    if (L.ghost && !L.dead) this.text('유령 · 우클릭이나 →로 가까운 상대에게 붙어 부활', W / 2, hintY, '#2ce8f5', 'center');
+    if (L.ghost && !L.dead && !this.ended) this.text('유령 · 거리 기록 끝 · ←→ 관전하기', W / 2, hintY, '#2ce8f5', 'center');
     if (this.spectating) {
       const others = this.specList().length > 1 ? ' · ←→ 다른 사람' : '';
       this.text(`관전 중 · ${this.spectating.name}${others} · Enter 채팅`, W / 2, hintY, '#c0cbdc', 'center');
@@ -1360,9 +1450,9 @@ export class Game {
     if (t < 0 && t > -3.2) {
       const n = Math.ceil(-t);
       const pop = n + t > 0.85 ? 1.5 : 1;
-      ART.ui.draw(ctx, 'num' + Math.min(3, n), W / 2, H / 2 - 30, { scale: pop });
+      ART.fx.draw(ctx, 'num' + Math.min(3, n), W / 2, H / 2 - 30, { scale: pop });
     } else if (t >= 0 && t < 0.8) {
-      ART.ui.draw(ctx, 'go', W / 2, H / 2 - 30, { alpha: t > 0.5 ? (0.8 - t) / 0.3 : 1 });
+      ART.fx.draw(ctx, 'go', W / 2, H / 2 - 30, { alpha: t > 0.5 ? (0.8 - t) / 0.3 : 1 });
     }
     if (t < -3.2) {
       ctx.font = FONT_BIG;

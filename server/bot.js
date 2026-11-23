@@ -47,15 +47,6 @@ export function attachRace(bot, log = () => {}) {
     R.lastHit = { by: d.by, at: Date.now() };
     if (R.hp <= 0) loseLife(bot, 'drain');
   });
-  s.on('race:revive', (d) => {
-    const R = bot.race;
-    if (!R || !R.ghost || R.dead) return;
-    R.ghost = false;
-    R.lives = 1;
-    R.hp = Math.min(R.maxHp, d.hp);
-    R.invUntil = Date.now() + 1500;
-    log(bot.name, '부활', d.hp);
-  });
   s.on('disconnect', () => stopRace(bot));
 }
 
@@ -88,17 +79,6 @@ function stats(R) {
   return deriveStats(R.ch.stats, R.feathers);
 }
 
-// 유령은 가장 가까운 살아 있는 상대에게 다가가 붙는다
-function ghostTarget(R) {
-  let best = null;
-  for (const p of R.others.values()) {
-    if (p.dead || p.ghost) continue;
-    const d = Math.abs(p.x - R.x) + Math.abs(p.y - R.y);
-    if (!best || d < best.d) best = { x: p.x, y: p.y, d };
-  }
-  return best;
-}
-
 // 누르고 떼는 순서를 여러 가지로 그려 보고, 같은 규칙으로 미리 날려 본 뒤 가장 나은 것을 고른다
 function plan(bot, t, now) {
   const R = bot.race;
@@ -107,9 +87,8 @@ function plan(bot, t, now) {
   const r = (now < R.eff.small ? 6 : 12) + R.margin;
   const obs = R.map.obstacles;
   const gems = R.map.gems;
-  const target = R.ghost ? ghostTarget(R) : null;
   // 가속은 마음먹은 동안만 고려한다. 사람처럼 늘 꾹 누르고 있지는 않는다
-  const boosts = R.ghost ? [!!(target && target.x > R.x + 40)] : R.boostOn ? [true, false] : [false];
+  const boosts = R.boostOn ? [true, false] : [false];
   const hungry = R.hp < R.maxHp * 0.7;
   const foods = R.map.foods;
   const items = R.map.skills;
@@ -128,8 +107,7 @@ function plan(bot, t, now) {
           moveFlyer(B, TICK);
           const at = now + (i + 1) * TICK * 1000;
           const tb = terrainAt(R.map, B.x);
-          if (target) cost += Math.abs(B.y - target.y) / 100;
-          else cost += Math.abs(B.y - (tb.top + tb.bottom) / 2) / Math.max(40, tb.bottom - tb.top);
+          cost += Math.abs(B.y - (tb.top + tb.bottom) / 2) / Math.max(40, tb.bottom - tb.top);
           if (at < R.dashUntil) continue;
           if (circleHitsTerrain(R.map, B.x, B.y, r)) {
             hit = i;
@@ -218,10 +196,11 @@ function loseLife(bot, cause) {
   bot.s.emit('race:lifeLost', { by, cause, lv: R.lives });
   bot.log(bot.name, `생명 잃음 ${cause}, 남은 ${R.lives}`);
   for (const k of Object.keys(R.eff)) R.eff[k] = 0;
+  // 목숨 둘을 다 잃으면 탈락. 봇은 유령으로 날지 않고 바로 빠진다
   if (R.lives <= 0) {
-    R.ghost = true;
     R.hp = 0;
     R.shield = false;
+    return finalOut(bot);
   } else {
     R.hp = R.maxHp;
     R.invUntil = now + RULES.lifeLostInvulnMs;
@@ -255,7 +234,6 @@ function step(bot, dt, t, now) {
   R.wasDashing = dashing;
 
   if (!dashing && circleHitsTerrain(R.map, R.x, R.y, r)) {
-    if (R.ghost) return finalOut(bot);
     if (now < R.invUntil) pushInside(R, r);
     else if (R.shield) {
       R.shield = false;
@@ -293,7 +271,7 @@ function step(bot, dt, t, now) {
   if (R.dead) return;
 
   if (!R.ghost) {
-    const reach = (r + 15) ** 2;
+    const reach = (r + 12) ** 2;
     const gems = R.map.gems;
     for (let i = lowerBound(gems, R.x - 30); i < gems.length && gems[i].x < R.x + 30; i++) {
       const g = gems[i];
@@ -307,7 +285,7 @@ function step(bot, dt, t, now) {
     for (let i = lowerBound(items, R.x - 30); i < items.length && items[i].x < R.x + 30; i++) {
       const it = items[i];
       if (R.grabbed.has(it.id)) continue;
-      if ((it.x - R.x) ** 2 + (it.y - R.y) ** 2 < (r + 19) ** 2) {
+      if ((it.x - R.x) ** 2 + (it.y - R.y) ** 2 < (r + 16) ** 2) {
         R.grabbed.add(it.id);
         bot.s.emit('race:grab', it.id);
       }
@@ -379,7 +357,7 @@ function startRace(bot, init, log) {
     greed: 0.4 + Math.random() * 0.8,
     boostRate: 0.45 + Math.random() * 0.3, // 가속을 마음먹는 시간 비율
     boostOn: true, boostUntil: 0,
-    skillAt: 0, latchAt: 0, sendAt: 0,
+    skillAt: 0, sendAt: 0,
   };
   bot.race = R;
   let last = Date.now();
@@ -411,11 +389,6 @@ function startRace(bot, init, log) {
         bot.s.emit('race:skill');
         R.skillAt = 0;
       }
-    }
-    if (R.ghost && now > R.latchAt) {
-      const g = ghostTarget(R);
-      if (g && Math.hypot(g.x - R.x, g.y - R.y) < RULES.ghostLatchRange) bot.s.emit('race:latch');
-      R.latchAt = now + 250;
     }
     if (now - R.sendAt >= 1000 / RULES.sendHz) {
       R.sendAt = now;

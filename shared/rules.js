@@ -32,9 +32,6 @@ export const RULES = {
   hitInvulnMs: 900,
   killCreditMs: 3_000, // 기술에 맞은 뒤 이 시간 안에 생명을 잃으면 KILL
 
-  // 유령
-  ghostLatchRange: 60,
-
   // 보석은 점수, 기술은 필드의 기술 아이콘을 먹어 하나 든다
   skillSlots: 5,
   redGemChance: 0.03,

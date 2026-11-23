@@ -60,21 +60,27 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-// 아틀라스 한 프레임을 정수배로 확대한 canvas
-function atlasCanvas(atlas, name, scale = 2, opt = {}) {
+// 아틀라스 한 프레임을 담은 canvas. scale은 경기 화면 1픽셀을 화면에 몇 CSS 픽셀로 보일지다.
+// 그림 해상도가 달라도 같은 크기로 보이고, 화면 배율만큼 촘촘히 그려 큰 그림은 매끄럽게 줄이고 작은 도트는 계단 그대로 키운다
+function atlasCanvas(atlas, name, scale = 1, opt = {}) {
   const c = document.createElement('canvas');
   const f = atlas && atlas.frame(name, 0, opt.index ?? 0);
   if (!f) {
     c.width = c.height = 1;
     return c;
   }
-  c.width = f.sw * scale;
-  c.height = f.sh * scale;
+  const cw = Math.round(f.sw * atlas.k * scale);
+  const ch = Math.round(f.sh * atlas.k * scale);
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.max(1, Math.round(cw * dpr));
+  c.height = Math.max(1, Math.round(ch * dpr));
   const ctx = c.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = c.width < f.sw;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(atlas.img, f.sx, f.sy, f.sw, f.sh, 0, 0, c.width, c.height);
-  c.style.width = c.width + 'px';
-  c.style.height = c.height + 'px';
+  c.style.width = cw + 'px';
+  c.style.height = ch + 'px';
+  if (c.width < f.sw) c.style.imageRendering = 'auto';
   return c;
 }
 
@@ -91,7 +97,7 @@ function pips(value) {
   box.style.gap = '2px';
   for (let i = 1; i <= 5; i++) {
     const name = value >= i ? 'pipFull' : value >= i - 0.5 ? 'pipHalf' : 'pipEmpty';
-    box.append(atlasCanvas(ART.ui, name, 2));
+    box.append(atlasCanvas(ART.ui, name, 4 / 3));
   }
   return box;
 }
@@ -141,6 +147,12 @@ function initTitle() {
   };
   $('#btn-enter').onclick = enter;
   $('#in-name').addEventListener('keydown', (e) => e.key === 'Enter' && enter());
+  // 로비에서 처음 화면으로. 이름은 칸에 그대로 남아 바로 다시 들어올 수 있다
+  $('#btn-home').onclick = () => {
+    sfx.click();
+    $('#in-name').value = S.name || store.get('intto.name') || '';
+    show('title');
+  };
   titleScene.start();
 }
 
@@ -166,7 +178,7 @@ function initLobby() {
   const keys = [
     [['keyMouseL', 'keyUp', 'keyW'], '누르는 동안 상승, 떼면 하강'],
     [['keySpace'], '누르는 동안 가속'],
-    [['keyMouseR', 'keyRight', 'keyD'], '현재 칸 기술 사용, 유령일 때 붙기'],
+    [['keyMouseR', 'keyRight', 'keyD'], '현재 칸 기술 사용'],
     [['keyEnter'], '채팅'],
     [['keyM'], '소리 끄기·켜기'],
   ];
@@ -176,7 +188,7 @@ function initLobby() {
     const li = el('li');
     const c = el('span', 'caps');
     for (const k of caps) {
-      if (ART.ui.has(k)) c.append(atlasCanvas(ART.ui, k, 2));
+      if (ART.fx.has(k)) c.append(atlasCanvas(ART.fx, k, 4 / 3));
       else c.append(el('span', 'cap-text', KEY_LABELS[k]));
     }
     li.append(c, el('span', '', desc));
@@ -327,11 +339,11 @@ function renderRoom() {
     nm.style.color = PLAYER_COLORS[i];
     who.append(nm);
     const sub = el('div', 'sub');
-    sub.append(atlasCanvas(ART.ui, 'miniMarker' + i, 2));
-    if (p.id === r.hostId) sub.append(atlasCanvas(ART.ui, 'crown', 2), el('span', '', '방장'));
-    else if (p.ready) sub.append(atlasCanvas(ART.ui, 'check', 2), el('span', '', '준비'));
+    sub.append(atlasCanvas(ART.fx, 'miniMarker' + i, 4 / 3));
+    if (p.id === r.hostId) sub.append(atlasCanvas(ART.ui, 'crown', 4 / 3), el('span', '', '방장'));
+    else if (p.ready) sub.append(atlasCanvas(ART.ui, 'check', 4 / 3), el('span', '', '준비'));
     else sub.append(el('span', '', '대기'));
-    if (r.mode === 'team') sub.append(atlasCanvas(ART.ui, p.team === 'A' ? 'teamA' : 'teamB', 2));
+    if (r.mode === 'team') sub.append(atlasCanvas(ART.ui, p.team === 'A' ? 'teamA' : 'teamB', 4 / 3));
     who.append(sub);
     who.append(el('span', 'sub', p.charId === 'random' ? '랜덤' : CHARACTER_BY_ID[p.charId]?.name));
     card.append(who);
@@ -392,7 +404,7 @@ function renderRoom() {
   if (r.mode === 'team' && me) {
     for (const t of ['A', 'B']) {
       const b = el('button', 'pix-btn' + (me.team === t ? ' on' : ''));
-      b.append(atlasCanvas(ART.ui, t === 'A' ? 'teamA' : 'teamB', 2));
+      b.append(atlasCanvas(ART.ui, t === 'A' ? 'teamA' : 'teamB', 4 / 3));
       b.append(document.createTextNode(` ${t}팀`));
       b.onclick = () => {
         sfx.click();
@@ -491,12 +503,15 @@ async function startRace(init) {
   await loadWorld(init.mapId);
   if (S.game) S.game.destroy();
   $('#result').classList.add('hidden');
+  $('#ghost-choice').classList.add('hidden');
   $('#game-chat-log').innerHTML = '';
   show('game');
   fitStage();
   S.game = new Game($('#game'), init, S.myId, {
     isTyping: () => gameChat.typing,
     onEnd: (d) => showResults(d),
+    onGhost: () => $('#ghost-choice').classList.remove('hidden'),
+    onGhostEnd: () => $('#ghost-choice').classList.add('hidden'),
   });
 }
 
@@ -523,6 +538,7 @@ function backToRoom() {
   if (S.game) S.game.destroy();
   S.game = null;
   $('#result').classList.add('hidden');
+  $('#ghost-choice').classList.add('hidden');
   gameChat.close();
   if (S.room) {
     show('room');
@@ -617,6 +633,17 @@ $('#btn-back').onclick = () => {
   sfx.click();
   backToRoom();
 };
+// 목숨을 다 잃었을 때 고르기. 누른 버튼에 포커스가 남으면 스페이스 가속이 버튼을 다시 누르므로 바로 뗀다
+$('#btn-ghost-fly').onclick = (e) => {
+  sfx.click();
+  e.currentTarget.blur();
+  $('#ghost-choice').classList.add('hidden');
+};
+$('#btn-ghost-watch').onclick = (e) => {
+  sfx.click();
+  e.currentTarget.blur();
+  if (S.game) S.game.watch();
+};
 
 // ── 시작 ──
 (async function boot() {
@@ -626,7 +653,6 @@ $('#btn-back').onclick = () => {
     loadCommonArt(),
     document.fonts.load('11px Galmuri11'),
     document.fonts.load('11px Galmuri11B'),
-    document.fonts.load('9px Galmuri9'),
     document.fonts.load('14px Galmuri14'),
   ]);
   const saved = store.get('intto.char');

@@ -31,10 +31,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 PX = WORLD_RES / 960  # 맵 1단위가 아틀라스 몇 픽셀인지. res 1440이면 1.5
 CAP_W = 60  # OBSTACLE_GEOM.mushroom.capW
-CAP_TOP = 66  # OBSTACLE_GEOM.mushroom.capTop
-CAP_BOTTOM = 40  # OBSTACLE_GEOM.mushroom.capBottom
+CAP_TOP = 55  # OBSTACLE_GEOM.mushroom.capTop
+CAP_BOTTOM = 34  # OBSTACLE_GEOM.mushroom.capBottom
 PYLON_W = 30  # 번개 기둥 머리 돌 테두리 폭. 가장 좁은 110 간격에서도 위아래 머리가 닿지 않는 크기
-BEAM_K = 0.32  # 번개 줄기: 원본 1픽셀이 키우기 전 몇 맵 단위인지. 줄기 길이가 가장 먼 기둥 사이를 덮도록 정했다
+BEAM_K = 0.35  # 번개 줄기: 원본 1픽셀이 키우기 전 몇 맵 단위인지. 줄기 길이가 가장 먼 기둥 사이를 덮도록 정했다
 
 
 def objects(keyed, cell=4, reach=3, small=1500, attach=80):
@@ -131,6 +131,30 @@ class Sheet:
         return img
 
 
+def strip_stray(arr, max_h=12, max_area=1500):
+    """외곽선 밖으로 삐져나온 가는 밝은 줄을 지운다. 원본 그림의 버섯 갓 왼쪽 흰 줄 같은 것.
+    바깥에서 어두운 외곽선을 넘지 않고 닿는 밝은 픽셀 덩어리 중 얇고 작은 것만 지운다"""
+    import paper_doll as pd
+    a = arr.copy()
+    op = a[..., 3] > 60
+    dark = op & (pd.lum(a) < 90)
+    passable = ~dark
+    out = np.zeros_like(passable)
+    out[0, :], out[-1, :], out[:, 0], out[:, -1] = passable[0, :], passable[-1, :], passable[:, 0], passable[:, -1]
+    while True:
+        nxt = pd.dilate(out) & passable
+        if (nxt == out).all():
+            break
+        out = nxt
+    n = 0
+    for m in pd.pieces_of(op & out & (pd.lum(a) > 110)):
+        ys, _ = np.nonzero(m)
+        if ys.max() - ys.min() + 1 <= max_h and m.sum() <= max_area:
+            a[m] = 0
+            n += 1
+    return a, n
+
+
 def pack_mushroom(keyed, sheet):
     objs = objects(keyed)
     assert len(objs) == 4, f"물체 {len(objs)}개, 4개여야 한다"
@@ -139,7 +163,8 @@ def pack_mushroom(keyed, sheet):
     mush, thorn_a, thorn_b = rest
 
     # 튕김 버섯: 갓 폭을 capW에. 기준점은 아래 가운데, drawBottom으로 그린다
-    arr = crop(keyed, mush)
+    arr, n = strip_stray(crop(keyed, mush))
+    print(f"  버섯 외곽선 밖 가는 줄 {n}개 지움")
     rw = row_widths(arr)
     cap_w = max(w for _, _, w in rw)
     k = CAP_W / cap_w

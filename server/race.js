@@ -42,7 +42,6 @@ export class Race {
         gems: 0,
         grabbed: new Set(), // 먹은 기술 아이콘. 아이콘은 사람마다 따로 먹는다
         niceSeen: new Set(),
-        latchCooldown: 0,
         connected: true,
       });
     });
@@ -113,7 +112,8 @@ export class Race {
     p.at = Date.now();
     p.ghost = p.s.ghost;
     p.dist = Math.max(0, num(s.dist));
-    if (p.s.dead && !p.dead) this.markOut(p);
+    // 목숨 둘을 다 잃어 유령이 되면 그 자리에서 기록이 끝난다. 유령으로 같이 날아도 순위와 끝내기 판정에서는 빠진다
+    if ((p.s.dead || p.s.ghost) && !p.dead) this.markOut(p);
   }
 
   onPickup(pid, gemId) {
@@ -192,32 +192,6 @@ export class Race {
       this.puddles.push(pd);
       this.broadcast('race:puddle', { id: pd.id, by: pid, x: pd.x, y: pd.y, r: pd.r, lifeMs: sk.lifeMs });
     }
-  }
-
-  onLatch(pid) {
-    const p = this.players.get(pid);
-    const now = Date.now();
-    if (!this.running(now) || !p || !p.s || !p.ghost || p.dead || now < p.latchCooldown) return;
-    const me = this.posOf(p, now);
-    let best = null;
-    let bestD = RULES.ghostLatchRange;
-    for (const q of this.players.values()) {
-      if (q === p || !this.alive(q) || q.s.inv || q.s.shield) continue;
-      const qp = this.posOf(q, now);
-      const d = Math.hypot(qp.x - me.x, qp.y - me.y);
-      if (d < bestD) {
-        best = q;
-        bestD = d;
-      }
-    }
-    if (!best) return;
-    const take = Math.floor(best.s.hp / 2);
-    if (take < 1) return;
-    p.latchCooldown = now + 800;
-    best.s.hp -= take;
-    this.emitTo(best.id, 'race:drain', { amount: take, by: pid });
-    this.emitTo(pid, 'race:revive', { hp: take, from: best.id });
-    this.broadcast('race:event', { type: 'revive', by: pid, target: best.id });
   }
 
   onLifeLost(pid, d) {

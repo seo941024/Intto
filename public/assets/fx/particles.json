@@ -1,19 +1,19 @@
 {
   "image": "particles.png",
-  "res": 960,
-  "frameWidth": 40,
-  "frameHeight": 12,
+  "res": 2880,
   "animations": {
     "streak": {
       "frames": [
-        0,
-        1,
-        2
+        [
+          0,
+          0,
+          53,
+          36
+        ]
       ],
-      "fps": 14,
       "anchor": [
-        39,
-        6
+        52,
+        18
       ]
     }
   }

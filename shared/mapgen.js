@@ -29,7 +29,7 @@ export const OBSTACLE_GEOM = {
   spore: { shape: 'circle', r: 14, variants: ['spore'], moving: true },
   crystal: { shape: 'circle', r: 18, variants: ['crystal_a', 'crystal_b'] },
   stormorb: { shape: 'circle', r: 16, variants: ['stormorb'], moving: true },
-  mushroom: { shape: 'mushroom', capW: 60, capTop: 66, capBottom: 40, stemW: 18, bounce: true }, // 버섯숲 그림의 높은 갓에 맞춘 높이
+  mushroom: { shape: 'mushroom', capW: 60, capTop: 55, capBottom: 34, stemW: 18, bounce: true }, // 버섯숲 그림의 높은 갓에 맞춘 높이
   bolt: { shape: 'column', w: 18 },
 };
 

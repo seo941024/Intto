@@ -90,7 +90,6 @@ export const sfx = {
   bounce: () => tone(220, 0.2, { type: 'triangle', vol: 0.45, slide: 440 }),
   lifeLost: () => [440, 330, 220].forEach((f, i) => tone(f, 0.14, { vol: 0.35, delay: i * 0.1 })),
   ghost: () => tone(330, 0.6, { type: 'sine', vol: 0.3, slide: -200 }),
-  revive: () => [392, 523, 659, 784].forEach((f, i) => tone(f, 0.1, { vol: 0.25, delay: i * 0.06 })),
   bolt: () => noise(0.35, { vol: 0.6, freq: 2500, q: 0.4 }),
   warn: () => tone(1200, 0.05, { vol: 0.15 }),
   nice: () => [1046, 1319].forEach((f, i) => tone(f, 0.12, { type: 'triangle', vol: 0.3, delay: i * 0.08 })),

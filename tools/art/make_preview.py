@@ -8,6 +8,7 @@
   python tools/art/make_preview.py --theme storm
 """
 import argparse
+import math
 import json
 import sys
 from pathlib import Path
@@ -64,23 +65,43 @@ def main():
     ceil_edge, ca = frame(td, timg, "ceilEdge")
     floor_body, _ = frame(td, timg, "floorBody")
     floor_edge, fa = frame(td, timg, "floorEdge")
+    # 땅은 게임처럼 오르내린다. 게임과 같이 4 맵 단위 폭 세로줄로 잘라 줄마다 높이를 다르게 붙인다
     ceil_line = round(40 * ZOOM)
     floor_line = round(300 * ZOOM)
-    for y in range(ceil_line - ceil_body.height, -ceil_body.height, -ceil_body.height):
-        tile_x(c, ceil_body, y)
-    tile_x(c, ceil_edge, ceil_line - ca[1])
-    for y in range(floor_line, H, floor_body.height):
-        tile_x(c, floor_body, y)
-    tile_x(c, floor_edge, floor_line - fa[1])
-    # 띠에서 떼어 낸 장식을 원래 자리에 세운다. 미리보기는 땅이 평평해서 띠와 똑같이 이어진다
-    for kind, edge, line in (("floor", floor_edge, floor_line), ("ceil", ceil_edge, ceil_line)):
+    col = round(4 * ZOOM)
+    cy = lambda x: ceil_line + 16 * math.sin(x / 150 + 0.6) + 7 * math.sin(x / 47 + 2.0)
+    fy = lambda x: floor_line + 20 * math.sin(x / 170 + 2.4) + 8 * math.sin(x / 53)
+    gap = td.get("bodyGap", {"floor": 0, "ceil": 0})
+
+    def body_col(src, x, y0, y1):
+        sx = x % src.width
+        piece = src.crop((sx, 0, min(src.width, sx + col), src.height))
+        y = y0
+        while y < y1:
+            c.alpha_composite(piece, (x, round(y)))
+            y += src.height
+
+    for x in range(0, W, col):
+        top = cy(x + col / 2)
+        bot = fy(x + col / 2)
+        y = top - gap["ceil"] - ceil_body.height
+        while y > -ceil_body.height:
+            body_col(ceil_body, x, y, y + 1)
+            y -= ceil_body.height
+        body_col(ceil_body, x, top - gap["ceil"] - ceil_body.height, top - gap["ceil"] - ceil_body.height + 1)
+        body_col(floor_body, x, bot + gap["floor"], H)
+        for edge, an, line in ((ceil_edge, ca, top), (floor_edge, fa, bot)):
+            sx = x % edge.width
+            c.alpha_composite(edge.crop((sx, 0, min(edge.width, sx + col), edge.height)), (x, round(line - an[1])))
+    # 띠에서 떼어 낸 장식을 그 자리 땅 높이에 통째로 세운다
+    for kind, edge in (("floor", floor_edge), ("ceil", ceil_edge)):
         for d in td.get("decor", {}).get(kind, []):
             im, an = frame(td, timg, d["name"])
-            y = line - d["dy"] if kind == "floor" else line + d["dy"]
             for x0 in range(0, W + edge.width, edge.width):
-                x = round(x0 + d["x"]) - an[0]
-                if -im.width < x < W:
-                    c.alpha_composite(im, (x, round(y - an[1])))
+                x = x0 + d["x"]
+                if -im.width < x - an[0] < W:
+                    y = fy(x) - d["dy"] if kind == "floor" else cy(x) + d["dy"]
+                    c.alpha_composite(im, (round(x - an[0]), round(y - an[1])))
 
     od, oimg = atlas(folder / "obstacles.json")
     idef, iimg = atlas(ROOT / "public" / "assets" / "items" / "items.json")
@@ -91,15 +112,16 @@ def main():
     if "mushroom" in od["animations"]:
         # 게임처럼 그림 아래 가운데를 땅 경계선보다 3 맵 단위 아래에
         im, _ = frame(od, oimg, "mushroom")
-        c.alpha_composite(im, (MUSHROOM_X - im.width // 2, floor_line + round(3 * ZOOM) - im.height))
+        c.alpha_composite(im, (MUSHROOM_X - im.width // 2, round(fy(MUSHROOM_X)) + round(3 * ZOOM) - im.height))
     if "beam" in od["animations"]:
         # 번개 기둥: 줄기 한 장을 위아래 땅 사이 가운데에 놓고 땅 밖은 자른다
         im, an = frame(od, oimg, "beam")
         layer = Image.new("RGBA", (W, H))
-        layer.alpha_composite(im, (BOLT_X - an[0], (ceil_line + floor_line) // 2 - an[1]))
-        layer = layer.crop((0, ceil_line, W, floor_line))
-        c.alpha_composite(layer, (0, ceil_line))
-        for name, y in (("pylonTop", ceil_line), ("pylonBottom", floor_line)):
+        top, bot = round(cy(BOLT_X)), round(fy(BOLT_X))
+        layer.alpha_composite(im, (BOLT_X - an[0], (top + bot) // 2 - an[1]))
+        layer = layer.crop((0, top, W, bot))
+        c.alpha_composite(layer, (0, top))
+        for name, y in (("pylonTop", top), ("pylonBottom", bot)):
             im, an = frame(od, oimg, name)
             c.alpha_composite(im, (BOLT_X - an[0], y - an[1]))
     for i in range(5):
