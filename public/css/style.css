@@ -164,7 +164,8 @@ body.no-ui-art .card.selected, body.no-ui-art .card:hover { border-color: var(--
 /* 초상은 이미 매끄럽게 줄인 그림이라, 카드가 좁아 더 줄어들 때도 계단 없이 줄인다 */
 img.portrait { image-rendering: auto; }
 .slot .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.slot .nm { font-family: 'Galmuri11B', 'Galmuri11', sans-serif; font-size: 22px; color: var(--white); text-shadow: var(--outline); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 긴 이름은 잘라 줄이되, 잘라 내는 칸이 글씨 둘레 테두리까지 품게 안쪽 여백을 두고 그만큼 바깥 여백으로 되돌린다 */
+.slot .nm { font-family: 'Galmuri11B', 'Galmuri11', sans-serif; font-size: 22px; color: var(--white); text-shadow: var(--outline); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px; margin: -4px; }
 .slot .sub { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
 .slot .sub canvas { width: auto; }
 .slot.empty .portrait, .slot.empty .who { opacity: 0.55; }
@@ -236,6 +237,10 @@ img.portrait { image-rendering: auto; }
 .ghost-choice { position: absolute; left: 0; right: 0; top: 28%; display: flex; justify-content: center; pointer-events: none; }
 .ghost-box { pointer-events: auto; text-align: center; }
 .ghost-box .row { justify-content: center; gap: 12px; }
+/* 유령으로 나는 동안에는 관전하기 버튼만 아래쪽 안내 글 위에 작게 남긴다 */
+.ghost-choice.flying { top: auto; bottom: 28%; }
+.ghost-choice.flying .ghost-box { border: none; border-image: none; background: none; padding: 0; }
+.ghost-choice.flying h2, .ghost-choice.flying #btn-ghost-fly { display: none; }
 .result { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(24, 20, 37, 0.6); }
 .result-box { width: min(760px, 92%); }
 .result-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }

@@ -6,7 +6,8 @@ import { MAPS, MAP_BY_ID } from '/shared/mapgen.js';
 import { RULES, PLAYER_COLORS } from '/shared/rules.js';
 import { Game } from './game.js';
 import { TitleScene } from './title.js';
-import { sfx, unlockAudio, toggleMute } from './sfx.js';
+import { sfx, unlockAudio, toggleMute, isMuted } from './sfx.js';
+import { music } from './music.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => {
@@ -48,6 +49,9 @@ function show(id) {
   S.screen = id;
   if (id === 'title') titleScene.start();
   else titleScene.stop();
+  // 배경음: 첫 화면은 첫 화면 곡, 로비와 대기실은 로비 곡. 경기 곡은 startRace에서 맵에 맞춰 튼다
+  if (id === 'title') music.play('title');
+  else if (id === 'lobby' || id === 'room') music.play('lobby');
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === 'scr-' + id));
 }
 
@@ -154,14 +158,15 @@ function initTitle() {
     show('title');
   };
   titleScene.start();
+  music.play('title');
 }
 
 const titleScene = new TitleScene($('#title-canvas'));
 
 // ── 로비 ──
 const KEY_LABELS = {
-  keyMouseL: '좌클릭', keyMouseR: '우클릭', keyUp: '↑', keyRight: '→', keyW: 'W', keyD: 'D',
-  keySpace: 'Space', keyEnter: 'Enter', keyM: 'M',
+  keyMouseL: '좌클릭', keyMouseR: '우클릭', keyUp: '↑', keyZ: 'Z', keyX: 'X',
+  keyEnter: 'Enter', keyM: 'M',
 };
 
 function initLobby() {
@@ -176,9 +181,9 @@ function initLobby() {
     if (!res.ok) toast(res.error);
   };
   const keys = [
-    [['keyMouseL', 'keyUp', 'keyW'], '누르는 동안 상승, 떼면 하강'],
-    [['keySpace'], '누르는 동안 가속'],
-    [['keyMouseR', 'keyRight', 'keyD'], '현재 칸 기술 사용'],
+    [['keyMouseL', 'keyUp'], '누르는 동안 상승, 떼면 하강'],
+    [['keyX'], '누르는 동안 가속'],
+    [['keyMouseR', 'keyZ'], '현재 칸 기술 사용'],
     [['keyEnter'], '채팅'],
     [['keyM'], '소리 끄기·켜기'],
   ];
@@ -506,11 +511,12 @@ async function startRace(init) {
   $('#ghost-choice').classList.add('hidden');
   $('#game-chat-log').innerHTML = '';
   show('game');
+  music.play(init.mapId);
   fitStage();
   S.game = new Game($('#game'), init, S.myId, {
     isTyping: () => gameChat.typing,
     onEnd: (d) => showResults(d),
-    onGhost: () => $('#ghost-choice').classList.remove('hidden'),
+    onGhost: () => $('#ghost-choice').classList.remove('hidden', 'flying'),
     onGhostEnd: () => $('#ghost-choice').classList.add('hidden'),
   });
 }
@@ -611,6 +617,7 @@ socket.on('connect', () => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM' && document.activeElement?.tagName !== 'INPUT') {
     const m = toggleMute();
+    music.setMuted(m);
     toast(m ? '소리 끔' : '소리 켬');
   }
   if (S.screen !== 'game') return;
@@ -633,11 +640,12 @@ $('#btn-back').onclick = () => {
   sfx.click();
   backToRoom();
 };
-// 목숨을 다 잃었을 때 고르기. 누른 버튼에 포커스가 남으면 스페이스 가속이 버튼을 다시 누르므로 바로 뗀다
+// 목숨을 다 잃었을 때 고르기. 누른 버튼에 포커스가 남으면 스페이스나 Enter가 버튼을 다시 누르므로 바로 뗀다
+// 유령으로 날기를 고르면 창은 접고 관전하기 버튼만 남긴다. 나중에 관전으로 넘어갈 때 누른다
 $('#btn-ghost-fly').onclick = (e) => {
   sfx.click();
   e.currentTarget.blur();
-  $('#ghost-choice').classList.add('hidden');
+  $('#ghost-choice').classList.add('flying');
 };
 $('#btn-ghost-watch').onclick = (e) => {
   sfx.click();
@@ -651,6 +659,7 @@ $('#btn-ghost-watch').onclick = (e) => {
   checkUiArt();
   await Promise.all([
     loadCommonArt(),
+    music.init(),
     document.fonts.load('11px Galmuri11'),
     document.fonts.load('11px Galmuri11B'),
     document.fonts.load('14px Galmuri14'),

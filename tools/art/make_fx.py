@@ -6,12 +6,14 @@
     3줄 상태  비구름 무게 흔들림 달팽이 날개 안쪽화살표 / 플레이어 화살표 빨강 파랑 초록 노랑 / 별
     4줄 글자  3 2 1 GO! NICE! KILL!
     5줄 키    마우스왼쪽 마우스오른쪽 SPACE ↑ → Enter W D M
+  art_inbox/keys_zx_v1.webp   같은 모양으로 따로 받은 Z, X 키. 기술 Z, 가속 X
 출력
   public/assets/fx/fx.png, fx.json                       효과, 상태 아이콘, 플레이어 화살표, 카운트다운, 조작 키
   public/assets/fx/particles.png, particles.json         가속 바람줄
   public/assets/characters/mongsil/trail.png, trail.json 몽실 구름 부스러기
 크기는 게임에서 그 그림이 차지하던 칸에 비율을 지켜 맞춘다. 단위는 경기 화면 960×540 기준 픽셀이고 월드 그림은 맵 단위다.
 같은 줄에서 나란히 쓰는 숫자와 키는 한 배율로 줄여 그림 속 크기 차이를 그대로 둔다.
+따로 받은 Z, X 키는 W 키와 같은 높이로 맞춘다. 지금 조작에 없는 SPACE, →, W, D 키는 싣지 않는다.
 res 2880으로 넣어 큰 화면에서도 늘리지 않고 줄여 그린다.
 대시 줄은 받은 그림이 왼쪽으로 달리는 모양이라 좌우만 뒤집어, 오른쪽으로 나는 캐릭터 뒤에 꼬리가 남게 한다.
 부활 반짝이와 별은 지금 쓰는 곳이 없어 싣지 않는다.
@@ -34,6 +36,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "art_inbox" / "fx_sheet_v1.webp"
+ZX_SRC = ROOT / "art_inbox" / "keys_zx_v1.webp"
 ASSETS = ROOT / "public" / "assets"
 RES = 2880
 PX = RES / 960  # 게임 1픽셀에 담는 그림 픽셀 수
@@ -48,6 +51,7 @@ ROWS = [
     (["keyMouseL", "keyMouseR", "keySpace", "keyUp", "keyRight", "keyEnter", "keyW", "keyD", "keyM"], (0, 0)),
 ]
 SKIP = {"revive", "star"}
+UNUSED_KEYS = {"keySpace", "keyRight", "keyW", "keyD"}  # 기술 Z, 가속 X로 바뀌어 쓰지 않는 키
 FLIP = {"dash"}
 
 # 칸 크기, 게임 픽셀. 그림을 비율 그대로 이 칸 안에 넣는다
@@ -74,9 +78,10 @@ TRAIL_BOX = (12, 12)  # 몽실 부스러기
 TRAIL_EMIT = {"flyFrame": 2, "at": [-22, -6], "lifeMs": 900}  # 날개를 내려치는 프레임에서 몸 뒤쪽 아래에 떨어뜨린다
 
 
-def pieces():
+def pieces(src=SRC, rows_spec=None):
     """줄마다 빈 세로줄로 그림을 가르고, 틈이 범위 안인 조각은 한 그림으로 붙인다"""
-    k = unkey(np.asarray(Image.open(SRC).convert("RGB")))
+    rows_spec = rows_spec or ROWS
+    k = unkey(np.asarray(Image.open(src).convert("RGB")))
     img = Image.fromarray(np.clip(k, 0, 255).astype(np.uint8), "RGBA")
     a = k[..., 3] > 100
     rows = a.any(1)
@@ -90,9 +95,9 @@ def pieces():
             if y - y0 > 20:
                 bands.append((y0, y))
         y += 1
-    assert len(bands) == len(ROWS), f"줄 {len(bands)}개"
+    assert len(bands) == len(rows_spec), f"줄 {len(bands)}개"
     out = {}
-    for (names, (lo, hi)), (y0, y1) in zip(ROWS, bands):
+    for (names, (lo, hi)), (y0, y1) in zip(rows_spec, bands):
         cols = a[y0:y1].any(0)
         segs = []
         x = 0
@@ -129,6 +134,11 @@ def main():
         k = h * PX / max(src[n].height for n in names)
         for n in names:
             imgs[n] = scaled(src[n], k)
+    zx = pieces(ZX_SRC, [(["keyZ", "keyX"], (0, 0))])
+    for n, im in zx.items():
+        imgs[n] = scaled(im, imgs["keyW"].height / im.height)
+    for n in UNUSED_KEYS:
+        del imgs[n]
 
     p = Packer(2048)
     anims = {}
@@ -146,7 +156,7 @@ def main():
     rect = p.add(tr)
     write_atlas(ASSETS / "characters" / "mongsil", "trail", p, {"trail": {"frames": [rect], "anchor": [tr.width // 2, tr.height // 2]}},
                 extra={"emit": TRAIL_EMIT}, res=RES)
-    for n in sorted(set(src) - set(imgs) - {"streak", "trail"} - SKIP):
+    for n in sorted(set(src) - set(imgs) - {"streak", "trail"} - SKIP - UNUSED_KEYS):
         print("쓰지 않은 조각", n)
 
 

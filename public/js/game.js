@@ -273,22 +273,19 @@ export class Game {
     add(window, 'keydown', (e) => {
       if (typing()) return;
       const k = e.code;
-      if (k === 'ArrowUp' || k === 'KeyW') this.input.up = true;
-      else if (k === 'Space') this.input.boost = true;
-      else if ((this.L.dead || this.L.ghost) && ['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(k)) {
-        // 유령이면 관전으로 넘어가고, 관전 중이면 볼 사람을 바꾼다
-        if (!e.repeat) {
-          if (this.L.dead) this.cycleSpec(k === 'ArrowLeft' || k === 'KeyA' ? -1 : 1);
-          else this.watch();
-        }
-      } else if ((k === 'ArrowRight' || k === 'KeyD') && !e.repeat) this.action();
+      if (k === 'ArrowUp') this.input.up = true;
+      else if (k === 'KeyX') this.input.boost = true;
+      else if (this.L.dead && ['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(k)) {
+        // 관전 중이면 볼 사람을 바꾼다. 유령은 앞으로 가려다 관전으로 넘어가지 않게 관전하기 버튼으로만 넘어간다
+        if (!e.repeat) this.cycleSpec(k === 'ArrowLeft' || k === 'KeyA' ? -1 : 1);
+      } else if (k === 'KeyZ' && !e.repeat) this.action();
       else return;
       e.preventDefault();
     });
     add(window, 'keyup', (e) => {
       const k = e.code;
-      if (k === 'ArrowUp' || k === 'KeyW') this.input.up = false;
-      if (k === 'Space') this.input.boost = false;
+      if (k === 'ArrowUp') this.input.up = false;
+      if (k === 'KeyX') this.input.boost = false;
     });
     add(window, 'blur', () => {
       this.input.up = false;
@@ -1435,7 +1432,7 @@ export class Game {
     // 안내
     ctx.font = FONT;
     const hintY = sy - 52;
-    if (L.ghost && !L.dead && !this.ended) this.text('유령 · 거리 기록 끝 · ←→ 관전하기', W / 2, hintY, '#2ce8f5', 'center');
+    if (L.ghost && !L.dead && !this.ended) this.text('유령 · 거리 기록 끝', W / 2, hintY, '#2ce8f5', 'center');
     if (this.spectating) {
       const others = this.specList().length > 1 ? ' · ←→ 다른 사람' : '';
       this.text(`관전 중 · ${this.spectating.name}${others} · Enter 채팅`, W / 2, hintY, '#c0cbdc', 'center');
