@@ -1,0 +1,8 @@
+node_modules
+art_inbox
+tools
+.git
+.claude
+Dockerfile
+.dockerignore
+*.md

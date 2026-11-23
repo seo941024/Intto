@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>인또</title>
+  <link rel="icon" type="image/png" href="/assets/ui/favicon.png">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="no-ui-art">
+  <div id="app">
+    <!-- 첫 화면 -->
+    <section id="scr-title" class="screen active">
+      <canvas id="title-canvas" width="960" height="540"></canvas>
+      <div class="title-ui">
+        <div class="panel title-box">
+          <label for="in-name">닉네임</label>
+          <input id="in-name" class="pix-input" maxlength="10" autocomplete="off" spellcheck="false">
+          <button id="btn-enter" class="pix-btn primary">입장</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 로비 -->
+    <section id="scr-lobby" class="screen">
+      <header class="topbar">
+        <img class="logo-sm" src="/assets/ui/logo.png" alt="인또">
+        <span class="me" id="lobby-me"></span>
+      </header>
+      <div class="lobby-grid">
+        <div class="panel rooms">
+          <h2>방 목록</h2>
+          <ul id="room-list" class="room-list"></ul>
+          <div class="row">
+            <input id="in-room-title" class="pix-input grow" placeholder="방 제목" maxlength="16" autocomplete="off">
+            <button id="btn-create" class="pix-btn primary">방 만들기</button>
+            <button id="btn-quick" class="pix-btn">빠른 입장</button>
+          </div>
+        </div>
+        <div class="panel help">
+          <h2>조작</h2>
+          <ul class="keys" id="help-keys"></ul>
+          <h2>규칙</h2>
+          <ul class="rules">
+            <li>제한 시간 2분 30초, 가장 멀리 난 사람이 1위</li>
+            <li>보석은 점수, 기술 아이콘을 먹으면 그 기술을 하나 들고 쓰기</li>
+            <li>지형에 부딪히면 생명 하나, 둘 다 잃으면 유령</li>
+            <li>유령은 상대에게 붙어 HP 절반을 빼앗아 부활</li>
+            <li>HP는 계속 줄어드니 붕어빵으로 채우기</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 방 -->
+    <section id="scr-room" class="screen">
+      <header class="topbar">
+        <img class="logo-sm" src="/assets/ui/logo.png" alt="인또">
+        <span class="room-title" id="room-title"></span>
+        <button id="btn-leave" class="pix-btn small">나가기</button>
+      </header>
+      <div class="room-grid">
+        <div class="panel slots">
+          <h2>참가자</h2>
+          <div id="slot-list" class="slot-list"></div>
+        </div>
+        <div class="panel picker">
+          <h2>캐릭터</h2>
+          <div id="char-list" class="char-list"></div>
+          <div id="char-info" class="char-info"></div>
+        </div>
+        <div class="panel settings">
+          <h2>맵</h2>
+          <div id="map-tabs" class="tabs"></div>
+          <div class="map-preview"><img id="map-preview" alt=""></div>
+          <p class="map-desc" id="map-desc"></p>
+          <h2>방식</h2>
+          <div id="mode-tabs" class="tabs"></div>
+          <div id="team-tabs" class="tabs"></div>
+          <p class="hint" id="start-hint"></p>
+          <button id="btn-main" class="pix-btn primary wide"></button>
+        </div>
+        <div class="panel chat">
+          <div id="room-chat-log" class="chat-log"></div>
+          <input id="room-chat-in" class="pix-input" placeholder="채팅" maxlength="80" autocomplete="off">
+        </div>
+      </div>
+    </section>
+
+    <!-- 레이스 -->
+    <section id="scr-game" class="screen">
+      <div id="stage">
+        <canvas id="game" width="960" height="540"></canvas>
+        <div id="game-chat">
+          <div id="game-chat-log" class="chat-log float"></div>
+          <input id="game-chat-in" class="pix-input" maxlength="80" autocomplete="off">
+        </div>
+        <div id="result" class="result hidden">
+          <div class="panel result-box">
+            <h2 id="result-title">결과</h2>
+            <table class="result-table">
+              <thead><tr><th>순위</th><th></th><th>이름</th><th>거리</th><th>KILL</th><th>NICE</th><th>보석</th></tr></thead>
+              <tbody id="result-body"></tbody>
+            </table>
+            <button id="btn-back" class="pix-btn primary wide">방으로</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast"></div>
+  </div>
+  <script src="/socket.io/socket.io.min.js"></script>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

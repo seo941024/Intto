@@ -1,0 +1,152 @@
+{
+  "image": "tiles.png",
+  "animations": {
+    "floorEdge": {
+      "frames": [
+        [
+          0,
+          0,
+          16,
+          12
+        ]
+      ],
+      "anchor": [
+        0,
+        3
+      ]
+    },
+    "ceilEdge": {
+      "frames": [
+        [
+          18,
+          0,
+          16,
+          12
+        ]
+      ],
+      "anchor": [
+        0,
+        6
+      ]
+    },
+    "particle": {
+      "frames": [
+        [
+          36,
+          0,
+          8,
+          8
+        ],
+        [
+          46,
+          0,
+          8,
+          8
+        ]
+      ],
+      "fps": 4,
+      "anchor": [
+        4,
+        4
+      ]
+    },
+    "floorBody": {
+      "frames": [
+        [
+          56,
+          0,
+          32,
+          32
+        ]
+      ],
+      "anchor": [
+        0,
+        0
+      ]
+    },
+    "ceilBody": {
+      "frames": [
+        [
+          0,
+          34,
+          32,
+          32
+        ]
+      ],
+      "anchor": [
+        0,
+        0
+      ]
+    },
+    "decor_floor_a": {
+      "frames": [
+        [
+          34,
+          34,
+          16,
+          16
+        ]
+      ],
+      "anchor": [
+        8,
+        14
+      ]
+    },
+    "decor_floor_b": {
+      "frames": [
+        [
+          52,
+          34,
+          16,
+          24
+        ]
+      ],
+      "anchor": [
+        8,
+        22
+      ]
+    },
+    "decor_floor_c": {
+      "frames": [
+        [
+          70,
+          34,
+          16,
+          16
+        ]
+      ],
+      "anchor": [
+        8,
+        14
+      ]
+    },
+    "decor_ceil_a": {
+      "frames": [
+        [
+          0,
+          68,
+          16,
+          24
+        ]
+      ],
+      "anchor": [
+        8,
+        1
+      ]
+    },
+    "decor_ceil_b": {
+      "frames": [
+        [
+          18,
+          68,
+          16,
+          16
+        ]
+      ],
+      "anchor": [
+        8,
+        1
+      ]
+    }
+  }
+}

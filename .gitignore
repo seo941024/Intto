@@ -1,0 +1,5 @@
+node_modules/
+.claude/
+# art_inbox에는 게임 그림 원본만 올린다. 개인 문서가 섞여 있어 그림이 아닌 파일은 뺀다
+art_inbox/**/*.pdf
+art_inbox/**/*.zip

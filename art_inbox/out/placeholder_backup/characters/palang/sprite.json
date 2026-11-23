@@ -1,0 +1,27 @@
+{
+  "image": "sheet.png",
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "hitRadius": 8,
+  "animations": {
+    "fly": {
+      "frames": [0, 1, 2, 3],
+      "fps": 10,
+      "anchor": [16, 17]
+    },
+    "boost": {
+      "frames": [4, 5],
+      "fps": 14,
+      "anchor": [16, 17]
+    },
+    "hurt": {
+      "frames": [6],
+      "anchor": [16, 17]
+    },
+    "ghost": {
+      "frames": [7, 8],
+      "fps": 4,
+      "anchor": [16, 17]
+    }
+  }
+}

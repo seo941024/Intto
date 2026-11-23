@@ -1,0 +1,331 @@
+{
+  "image": "tiles.png",
+  "res": 1440,
+  "animations": {
+    "ceilEdge": {
+      "frames": [
+        [
+          0,
+          0,
+          1563,
+          152
+        ]
+      ],
+      "anchor": [
+        0,
+        115
+      ]
+    },
+    "ceilBody": {
+      "frames": [
+        [
+          0,
+          154,
+          1563,
+          58
+        ]
+      ]
+    },
+    "floorEdge": {
+      "frames": [
+        [
+          0,
+          214,
+          1563,
+          133
+        ]
+      ],
+      "anchor": [
+        0,
+        44
+      ]
+    },
+    "floorBody": {
+      "frames": [
+        [
+          0,
+          349,
+          1563,
+          109
+        ]
+      ]
+    },
+    "decor_floor0": {
+      "frames": [
+        [
+          0,
+          460,
+          194,
+          40
+        ]
+      ],
+      "anchor": [
+        97,
+        40
+      ]
+    },
+    "decor_floor1": {
+      "frames": [
+        [
+          0,
+          502,
+          197,
+          39
+        ]
+      ],
+      "anchor": [
+        98,
+        39
+      ]
+    },
+    "decor_floor2": {
+      "frames": [
+        [
+          0,
+          543,
+          156,
+          31
+        ]
+      ],
+      "anchor": [
+        78,
+        31
+      ]
+    },
+    "decor_floor3": {
+      "frames": [
+        [
+          0,
+          576,
+          55,
+          30
+        ]
+      ],
+      "anchor": [
+        27,
+        30
+      ]
+    },
+    "decor_floor4": {
+      "frames": [
+        [
+          0,
+          608,
+          110,
+          26
+        ]
+      ],
+      "anchor": [
+        55,
+        26
+      ]
+    },
+    "decor_floor5": {
+      "frames": [
+        [
+          0,
+          636,
+          57,
+          19
+        ]
+      ],
+      "anchor": [
+        28,
+        19
+      ]
+    },
+    "decor_floor6": {
+      "frames": [
+        [
+          0,
+          657,
+          30,
+          19
+        ]
+      ],
+      "anchor": [
+        15,
+        19
+      ]
+    },
+    "decor_floor7": {
+      "frames": [
+        [
+          0,
+          678,
+          26,
+          17
+        ]
+      ],
+      "anchor": [
+        13,
+        17
+      ]
+    },
+    "decor_floor8": {
+      "frames": [
+        [
+          0,
+          697,
+          35,
+          14
+        ]
+      ],
+      "anchor": [
+        17,
+        14
+      ]
+    },
+    "decor_floor9": {
+      "frames": [
+        [
+          0,
+          713,
+          23,
+          14
+        ]
+      ],
+      "anchor": [
+        11,
+        14
+      ]
+    },
+    "decor_floor10": {
+      "frames": [
+        [
+          0,
+          729,
+          43,
+          14
+        ]
+      ],
+      "anchor": [
+        21,
+        14
+      ]
+    },
+    "decor_floor11": {
+      "frames": [
+        [
+          0,
+          745,
+          19,
+          12
+        ]
+      ],
+      "anchor": [
+        9,
+        12
+      ]
+    },
+    "decor_floor12": {
+      "frames": [
+        [
+          0,
+          759,
+          23,
+          11
+        ]
+      ],
+      "anchor": [
+        11,
+        11
+      ]
+    },
+    "particle": {
+      "frames": [
+        [
+          0,
+          772,
+          18,
+          18
+        ],
+        [
+          20,
+          772,
+          18,
+          18
+        ]
+      ],
+      "fps": 3,
+      "anchor": [
+        9,
+        9
+      ]
+    }
+  },
+  "decor": {
+    "floor": [
+      {
+        "name": "decor_floor0",
+        "x": 1389.0,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor1",
+        "x": 715.7,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor2",
+        "x": 183.4,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor3",
+        "x": 975.1,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor4",
+        "x": 1060.4,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor5",
+        "x": 416.0,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor6",
+        "x": 903.8,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor7",
+        "x": 1499.1,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor8",
+        "x": 366.9,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor9",
+        "x": 828.9,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor10",
+        "x": 1536.8,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor11",
+        "x": 879.5,
+        "dy": 1.0
+      },
+      {
+        "name": "decor_floor12",
+        "x": 1207.1,
+        "dy": 1.0
+      }
+    ],
+    "ceil": []
+  },
+  "bodyGap": {
+    "floor": 26.9,
+    "ceil": 48.6
+  }
+}

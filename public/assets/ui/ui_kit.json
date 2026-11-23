@@ -1,0 +1,65 @@
+{
+  "panel": {
+    "slice": 19,
+    "size": [
+      292,
+      179
+    ]
+  },
+  "button": {
+    "slice": 13,
+    "size": [
+      157,
+      52
+    ]
+  },
+  "button_hover": {
+    "slice": 15,
+    "size": [
+      161,
+      56
+    ]
+  },
+  "button_down": {
+    "slice": 12,
+    "size": [
+      157,
+      52
+    ]
+  },
+  "button_primary": {
+    "slice": 13,
+    "size": [
+      132,
+      55
+    ]
+  },
+  "button_primary_hover": {
+    "slice": 17,
+    "size": [
+      132,
+      56
+    ]
+  },
+  "card": {
+    "slice": 18,
+    "size": [
+      106,
+      103
+    ]
+  },
+  "card_selected": {
+    "slice": 29,
+    "size": [
+      120,
+      125
+    ]
+  },
+  "input": {
+    "slice": 12,
+    "size": [
+      220,
+      57
+    ]
+  }
+}
