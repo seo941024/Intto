@@ -4,9 +4,9 @@ import { mulberry32, hashString } from './rng.js';
 import { RULES } from './rules.js';
 
 export const MAPS = [
-  { id: 'cloud', name: '구름섬', desc: '넓은 하늘길, 떠 있는 바위와 가시 풍선' },
-  { id: 'mushroom', name: '버섯숲', desc: '튕겨 올리는 버섯과 가시덤불' },
-  { id: 'storm', name: '폭풍협곡', desc: '예고 뒤 내리치는 번개 기둥' },
+  { id: 'cloud', name: '구름섬', desc: '바위와 가시 풍선이 떠다니는 넓은 하늘' },
+  { id: 'mushroom', name: '버섯숲', desc: '부딪히면 통 튀어 오르는 버섯과 가시덤불' },
+  { id: 'storm', name: '폭풍협곡', desc: '경고가 뜬 뒤 번개 기둥이 내리치는 협곡' },
 ];
 export const MAP_BY_ID = Object.fromEntries(MAPS.map((m) => [m.id, m]));
 

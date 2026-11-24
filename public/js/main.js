@@ -141,7 +141,7 @@ function initTitle() {
     unlockAudio();
     const name = $('#in-name').value.trim().slice(0, 10);
     const res = await request('hello', { name });
-    if (!res || !res.id) return toast('서버에 연결되지 않음');
+    if (!res || !res.id) return toast('서버에 연결할 수 없음');
     S.myId = res.id;
     S.name = res.name;
     store.set('intto.name', res.name);
@@ -158,7 +158,19 @@ function initTitle() {
     show('title');
   };
   titleScene.start();
-  music.play('title');
+  // 브라우저는 처음 누르기 전에 소리를 막는다. PRESS START를 누르는 그 입력에서 첫 화면 곡을 틀고 이름 칸을 연다
+  const begin = () => {
+    if (S.screen !== 'title') return;
+    window.removeEventListener('pointerdown', begin, true);
+    window.removeEventListener('keydown', begin, true);
+    unlockAudio();
+    music.play('title');
+    $('#press-start').classList.add('hidden');
+    $('.title-box').classList.remove('hidden');
+    setTimeout(() => $('#in-name').focus(), 0);
+  };
+  window.addEventListener('pointerdown', begin, true);
+  window.addEventListener('keydown', begin, true);
 }
 
 const titleScene = new TitleScene($('#title-canvas'));
@@ -183,9 +195,9 @@ function initLobby() {
   const keys = [
     [['keyMouseL', 'keyUp'], '누르는 동안 상승, 떼면 하강'],
     [['keyX'], '누르는 동안 가속'],
-    [['keyMouseR', 'keyZ'], '현재 칸 기술 사용'],
+    [['keyMouseR', 'keyZ'], '들고 있는 기술 쓰기'],
     [['keyEnter'], '채팅'],
-    [['keyM'], '소리 끄기·켜기'],
+    [['keyM'], '소리 켜기·끄기'],
   ];
   const ul = $('#help-keys');
   ul.innerHTML = '';
@@ -377,7 +389,7 @@ function renderRoom() {
   // 맵
   const tabs = $('#map-tabs');
   tabs.innerHTML = '';
-  for (const m of [...MAPS, { id: 'random', name: '랜덤', desc: '시작할 때 셋 중 하나' }]) {
+  for (const m of [...MAPS, { id: 'random', name: '랜덤', desc: '세 맵 중 하나를 무작위로 고름' }]) {
     const b = el('button', 'pix-btn' + (r.mapId === m.id ? ' on' : ''), m.name);
     b.disabled = !isHost && r.mapId !== m.id;
     b.onclick = () => {
@@ -388,7 +400,7 @@ function renderRoom() {
     tabs.append(b);
   }
   $('#map-preview').src = r.mapId === 'random' ? '/assets/ui/map_random.png' : `/assets/world/${r.mapId}/preview.png`;
-  $('#map-desc').textContent = r.mapId === 'random' ? '시작할 때 셋 중 하나' : MAP_BY_ID[r.mapId]?.desc ?? '';
+  $('#map-desc').textContent = r.mapId === 'random' ? '세 맵 중 하나를 무작위로 고름' : MAP_BY_ID[r.mapId]?.desc ?? '';
 
   // 방식
   const modes = $('#mode-tabs');
@@ -423,10 +435,10 @@ function renderRoom() {
   const btn = $('#btn-main');
   let hint = '';
   const n = r.players.length;
-  if (n < RULES.minPlayers) hint = `${RULES.minPlayers}명 이상 모이면 시작`;
-  else if (r.mode === 'team' && n !== 4) hint = '팀전은 4명일 때만';
-  else if (r.mode === 'team' && r.players.filter((p) => p.team === 'A').length !== 2) hint = '팀을 2:2로 나누기';
-  else if (r.players.some((p) => p.id !== r.hostId && !p.ready)) hint = '모두 준비하면 시작';
+  if (n < RULES.minPlayers) hint = `${RULES.minPlayers}명 이상 모여야 시작할 수 있음`;
+  else if (r.mode === 'team' && n !== 4) hint = '팀전은 4명이 모여야 할 수 있음';
+  else if (r.mode === 'team' && r.players.filter((p) => p.team === 'A').length !== 2) hint = '팀을 2명씩 나눠야 시작할 수 있음';
+  else if (r.players.some((p) => p.id !== r.hostId && !p.ready)) hint = '모두 준비해야 시작할 수 있음';
   if (isHost) {
     btn.textContent = '시작';
     btn.disabled = !!hint;
@@ -563,7 +575,7 @@ socket.on('room:kicked', () => {
   S.game = null;
   S.room = null;
   show('lobby');
-  toast('방장이 방에서 내보냄');
+  toast('방장이 방에서 내보냈음');
 });
 
 socket.on('room:state', (room) => {
@@ -597,7 +609,7 @@ socket.on('server:build', (b) => {
 });
 
 socket.on('disconnect', () => {
-  toast('연결이 끊김, 다시 연결하는 중');
+  toast('연결이 끊겨서 다시 연결하는 중');
 });
 socket.on('connect', () => {
   syncClock();

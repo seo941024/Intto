@@ -18,7 +18,7 @@ const VW = W / Z;
 const VH = H / Z;
 const WH = RULES.worldH; // 맵 세로 크기
 // 배경에 덮는 안개: 색, 먼 배경 위 진하기, 가까운 섬 위 진하기. 폭풍협곡은 밝게 빛나는 번개·수정이 잘 보이게 어두운 남색
-const HAZE = { default: ['214, 236, 255', 0.18, 0.2], storm: ['16, 14, 46', 0.28, 0.25] };
+const HAZE = { default: ['214, 236, 255', 0.36, 0.4], storm: ['16, 14, 46', 0.56, 0.5] };
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // 글씨는 모두 갈무리 굵은 글꼴. 맵 위 글씨는 1.5배로 당겨 보이므로 13px, 화면 위 HUD 글씨는 18px
 const FONT = '18px Galmuri11B';
@@ -162,6 +162,30 @@ export class Game {
     this.ceilEdgeAy = (t.frame('ceilEdge')?.ay || 0) * ek;
     this.floorEdgeAy = (t.frame('floorEdge')?.ay || 0) * ek;
     this.decor = t.def.decor || { floor: [], ceil: [] };
+    // 땅에서 튀어나온 꽃·버섯·수정·덩굴 장식은 부딪히지 않는 그림이다. 가까운 배경과 같은 안개를 입혀 장애물과 헷갈리지 않게 한다
+    // 땅에 붙은 밑동은 띠와 이어지게 안개를 입히지 않고, 땅에서 멀어질수록 서서히 진하게 입힌다
+    const [hc, , hMid] = HAZE[this.theme] || HAZE.default;
+    this.decorImg = new Map();
+    for (const [list, floor] of [[this.decor.floor || [], true], [this.decor.ceil || [], false]]) {
+      for (const d of list) {
+        const f = t.frame(d.name);
+        if (!f || !t.img || this.decorImg.has(d.name)) continue;
+        const c = document.createElement('canvas');
+        c.width = f.sw;
+        c.height = f.sh;
+        const g = c.getContext('2d');
+        g.drawImage(t.img, f.sx, f.sy, f.sw, f.sh, 0, 0, f.sw, f.sh);
+        const ramp = Math.max(4, Math.min(16, f.sh * 0.4));
+        const base = floor ? f.sh : 0;
+        const grad = g.createLinearGradient(0, base, 0, floor ? base - ramp : base + ramp);
+        grad.addColorStop(0, `rgba(${hc}, 0)`);
+        grad.addColorStop(1, `rgba(${hc}, ${hMid})`);
+        g.globalCompositeOperation = 'source-atop';
+        g.fillStyle = grad;
+        g.fillRect(0, 0, f.sw, f.sh);
+        this.decorImg.set(d.name, { c, f });
+      }
+    }
     const rng = mulberry32(this.init.seed);
     for (let i = 0; i < 60; i++) {
       this.particles.push({ x: rng.range(0, W), y: rng.range(0, H), p: rng.range(0, 10), s: rng.range(0.6, 1.4) });
@@ -680,7 +704,7 @@ export class Game {
       const pos = this.posOf(d.by);
       if (pos) this.popups.push({ img: 'kill', x: pos.x, y: pos.y - 45, t0: now, dur: 1000 });
       if (d.by === this.myId) sfx.kill();
-    } else if (d.type === 'crash') text = `${name(d.target)} 충돌, 남은 생명 ${Math.max(0, d.lv)}`;
+    } else if (d.type === 'crash') text = `${name(d.target)} 부딪힘, 남은 생명 ${Math.max(0, d.lv)}개`;
     else if (d.type === 'out') text = `${name(d.target)} 탈락`;
     else if (d.type === 'left') text = `${name(d.target)} 나감`;
     else if (d.type === 'nice' && d.target !== this.myId) text = `${name(d.target)} NICE`;
@@ -929,9 +953,14 @@ export class Game {
       }
     }
     ctx.setTransform(base);
-    // 장식은 띠와 같은 높이에 반올림 없이 세운다
-    for (const p of pins.floor) tiles.draw(ctx, p.d.name, p.x, p.h - p.d.dy * ek);
-    for (const p of pins.ceil) tiles.draw(ctx, p.d.name, p.x, p.h + p.d.dy * ek);
+    // 장식은 띠와 같은 높이에 반올림 없이 세우고, 안개를 입힌 그림으로 그린다
+    const drawDecor = (name, x, y) => {
+      const e = this.decorImg.get(name);
+      if (!e) return tiles.draw(ctx, name, x, y);
+      ctx.drawImage(e.c, x - e.f.ax * ek, y - e.f.ay * ek, e.f.sw * ek, e.f.sh * ek);
+    };
+    for (const p of pins.floor) drawDecor(p.d.name, p.x, p.h - p.d.dy * ek);
+    for (const p of pins.ceil) drawDecor(p.d.name, p.x, p.h + p.d.dy * ek);
   }
 
   drawObstacles(camX, t, now) {
@@ -1432,9 +1461,9 @@ export class Game {
     // 안내
     ctx.font = FONT;
     const hintY = sy - 52;
-    if (L.ghost && !L.dead && !this.ended) this.text('유령 · 거리 기록 끝', W / 2, hintY, '#2ce8f5', 'center');
+    if (L.ghost && !L.dead && !this.ended) this.text('유령 · 기록은 여기까지', W / 2, hintY, '#2ce8f5', 'center');
     if (this.spectating) {
-      const others = this.specList().length > 1 ? ' · ←→ 다른 사람' : '';
+      const others = this.specList().length > 1 ? ' · ←→ 다른 사람 보기' : '';
       this.text(`관전 중 · ${this.spectating.name}${others} · Enter 채팅`, W / 2, hintY, '#c0cbdc', 'center');
     }
     else if (L.dead) this.text('탈락 · Enter 채팅', W / 2, hintY, '#c0cbdc', 'center');

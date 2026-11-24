@@ -65,12 +65,12 @@ class Room {
   }
   startProblem() {
     const list = this.ordered();
-    if (list.length < RULES.minPlayers) return `${RULES.minPlayers}명 이상 모여야 시작`;
-    if (list.some((m) => m.id !== this.hostId && !m.ready)) return '모두 준비해야 시작';
+    if (list.length < RULES.minPlayers) return `${RULES.minPlayers}명 이상 모여야 시작할 수 있음`;
+    if (list.some((m) => m.id !== this.hostId && !m.ready)) return '모두 준비해야 시작할 수 있음';
     if (this.mode === 'team') {
-      if (list.length !== RULES.teamModePlayers) return '팀전은 4명일 때만';
+      if (list.length !== RULES.teamModePlayers) return '팀전은 4명이 모여야 할 수 있음';
       const a = list.filter((m) => m.team === 'A').length;
-      if (a !== 2) return '팀을 2:2로 나눠야 시작';
+      if (a !== 2) return '팀을 2명씩 나눠야 시작할 수 있음';
     }
     return null;
   }
@@ -202,11 +202,11 @@ io.on('connection', (socket) => {
     const room = myRoom();
     if (!room) return ack(fn, { error: '방에 있지 않음' });
     if (room.hostId !== me.id) return ack(fn, { error: '방장만 봇을 넣을 수 있음' });
-    if (room.state !== 'waiting') return ack(fn, { error: '게임 중에는 넣을 수 없음' });
+    if (room.state !== 'waiting') return ack(fn, { error: '게임 중에는 봇을 넣을 수 없음' });
     if (room.members.size + room.botsComing.size >= RULES.maxPlayers) return ack(fn, { error: '방이 가득 참' });
     const used = new Set([...room.ordered().map((m) => m.name), ...room.botsComing]);
     const name = BOT_NAMES.find((n) => !used.has(n));
-    if (!name) return ack(fn, { error: '봇은 셋까지' });
+    if (!name) return ack(fn, { error: '봇은 3명까지 넣을 수 있음' });
     room.botsComing.add(name);
     const seat = BOT_NAMES.indexOf(name);
     spawnBot({
@@ -238,8 +238,8 @@ io.on('connection', (socket) => {
 
   socket.on('room:start', (_d, fn) => {
     const room = myRoom();
-    if (!room || room.hostId !== me.id) return ack(fn, { ok: false, error: '방장만 시작' });
-    if (room.state !== 'waiting') return ack(fn, { ok: false, error: '이미 게임 중' });
+    if (!room || room.hostId !== me.id) return ack(fn, { ok: false, error: '방장만 시작할 수 있음' });
+    if (room.state !== 'waiting') return ack(fn, { ok: false, error: '이미 게임 중인 방' });
     const problem = room.startProblem();
     if (problem) return ack(fn, { ok: false, error: problem });
     room.state = 'playing';

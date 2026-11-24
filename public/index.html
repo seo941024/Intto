@@ -13,7 +13,8 @@
     <section id="scr-title" class="screen active">
       <canvas id="title-canvas" width="960" height="540"></canvas>
       <div class="title-ui">
-        <div class="panel title-box">
+        <img id="press-start" class="press-start" src="/assets/ui/press_start.png" alt="PRESS START">
+        <div class="panel title-box hidden">
           <label for="in-name">닉네임</label>
           <input id="in-name" class="pix-input" maxlength="10" autocomplete="off" spellcheck="false">
           <button id="btn-enter" class="pix-btn primary">입장</button>
@@ -43,11 +44,11 @@
           <ul class="keys" id="help-keys"></ul>
           <h2>규칙</h2>
           <ul class="rules">
-            <li>제한 시간 2분 30초, 가장 멀리 난 사람이 1위</li>
-            <li>보석은 점수, 기술 아이콘을 먹으면 그 기술을 하나 들고 쓰기</li>
-            <li>지형에 부딪히면 생명 하나, 둘 다 잃으면 탈락</li>
-            <li>탈락하면 유령으로 같이 날거나 관전하기</li>
-            <li>HP는 계속 줄어드니 붕어빵으로 채우기</li>
+            <li>2분 30초 동안 가장 멀리 날아간 사람이 1위</li>
+            <li>보석을 먹으면 점수, 기술 아이콘을 먹으면 그 기술을 한 번 쓸 수 있음</li>
+            <li>땅이나 천장에 부딪히면 생명이 하나 줄고, 둘 다 잃으면 탈락</li>
+            <li>탈락하면 유령으로 계속 날거나 관전할 수 있음</li>
+            <li>HP는 계속 줄어들고, 붕어빵을 먹으면 다시 차오름</li>
           </ul>
         </div>
       </div>
@@ -98,9 +99,9 @@
         </div>
         <div id="ghost-choice" class="ghost-choice hidden">
           <div class="panel ghost-box">
-            <h2>탈락 · 거리 기록 끝</h2>
+            <h2>탈락 · 기록은 여기까지</h2>
             <div class="row">
-              <button id="btn-ghost-fly" class="pix-btn">유령으로 같이 날기</button>
+              <button id="btn-ghost-fly" class="pix-btn">유령으로 계속 날기</button>
               <button id="btn-ghost-watch" class="pix-btn primary">관전하기</button>
             </div>
           </div>
