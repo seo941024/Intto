@@ -193,9 +193,9 @@ function initLobby() {
     if (!res.ok) toast(res.error);
   };
   const keys = [
-    [['keyMouseL', 'keyUp'], '누르는 동안 상승, 떼면 하강'],
-    [['keyX'], '누르는 동안 가속'],
-    [['keyMouseR', 'keyZ'], '들고 있는 기술 쓰기'],
+    [['keyMouseL', 'keyUp'], '누르면 상승, 떼면 하강'],
+    [['keyX'], '누르면 가속'],
+    [['keyMouseR', 'keyZ'], '획득한 기술 사용'],
     [['keyEnter'], '채팅'],
     [['keyM'], '소리 켜기·끄기'],
   ];
@@ -217,7 +217,7 @@ function renderRooms() {
   const ul = $('#room-list');
   ul.innerHTML = '';
   if (!S.rooms.length) {
-    ul.append(el('li', 'empty', '열린 방이 없음'));
+    ul.append(el('li', 'empty', '만들어진 방이 없습니다.'));
     return;
   }
   for (const r of S.rooms) {
@@ -389,7 +389,7 @@ function renderRoom() {
   // 맵
   const tabs = $('#map-tabs');
   tabs.innerHTML = '';
-  for (const m of [...MAPS, { id: 'random', name: '랜덤', desc: '세 맵 중 하나를 무작위로 고름' }]) {
+  for (const m of [...MAPS, { id: 'random', name: '랜덤', desc: '세 맵 중 무작위로 하나를 선택' }]) {
     const b = el('button', 'pix-btn' + (r.mapId === m.id ? ' on' : ''), m.name);
     b.disabled = !isHost && r.mapId !== m.id;
     b.onclick = () => {
@@ -400,7 +400,7 @@ function renderRoom() {
     tabs.append(b);
   }
   $('#map-preview').src = r.mapId === 'random' ? '/assets/ui/map_random.png' : `/assets/world/${r.mapId}/preview.png`;
-  $('#map-desc').textContent = r.mapId === 'random' ? '세 맵 중 하나를 무작위로 고름' : MAP_BY_ID[r.mapId]?.desc ?? '';
+  $('#map-desc').textContent = r.mapId === 'random' ? '세 맵 중 무작위로 하나를 선택' : MAP_BY_ID[r.mapId]?.desc ?? '';
 
   // 방식
   const modes = $('#mode-tabs');
@@ -435,10 +435,10 @@ function renderRoom() {
   const btn = $('#btn-main');
   let hint = '';
   const n = r.players.length;
-  if (n < RULES.minPlayers) hint = `${RULES.minPlayers}명 이상 모여야 시작할 수 있음`;
-  else if (r.mode === 'team' && n !== 4) hint = '팀전은 4명이 모여야 할 수 있음';
-  else if (r.mode === 'team' && r.players.filter((p) => p.team === 'A').length !== 2) hint = '팀을 2명씩 나눠야 시작할 수 있음';
-  else if (r.players.some((p) => p.id !== r.hostId && !p.ready)) hint = '모두 준비해야 시작할 수 있음';
+  if (n < RULES.minPlayers) hint = `${RULES.minPlayers}명 이상 모여야 시작할 수 있어요!`;
+  else if (r.mode === 'team' && n !== 4) hint = '팀전은 4명이 모여야 할 수 있어요!';
+  else if (r.mode === 'team' && r.players.filter((p) => p.team === 'A').length !== 2) hint = '팀을 2명씩 나눠야 시작할 수 있어요!';
+  else if (r.players.some((p) => p.id !== r.hostId && !p.ready)) hint = '모두 준비해야 시작할 수 있어요!';
   if (isHost) {
     btn.textContent = '시작';
     btn.disabled = !!hint;

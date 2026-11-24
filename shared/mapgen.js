@@ -5,8 +5,8 @@ import { RULES } from './rules.js';
 
 export const MAPS = [
   { id: 'cloud', name: '구름섬', desc: '바위와 가시 풍선이 떠다니는 넓은 하늘' },
-  { id: 'mushroom', name: '버섯숲', desc: '부딪히면 통 튀어 오르는 버섯과 가시덤불' },
-  { id: 'storm', name: '폭풍협곡', desc: '경고가 뜬 뒤 번개 기둥이 내리치는 협곡' },
+  { id: 'mushroom', name: '버섯숲', desc: '우거진 밀림과 함께 버섯이 가득한 정글' },
+  { id: 'storm', name: '폭풍협곡', desc: '거센 바람이 불고 번개 기둥이 내리치는 협곡' },
 ];
 export const MAP_BY_ID = Object.fromEntries(MAPS.map((m) => [m.id, m]));
 

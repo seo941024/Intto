@@ -130,7 +130,7 @@ function plan(bot, t, now) {
             const it = items[k];
             if (!R.grabbed.has(it.id) && (it.x - B.x) ** 2 + (it.y - B.y) ** 2 < 26 * 26) gain += itemGain;
           }
-          // 체력이 줄었으면 붕어빵 쪽으로
+          // 체력이 줄었으면 고기 쪽으로
           if (hungry) {
             for (let k = lowerBound(foods, B.x - 20); k < foods.length && foods[k].x < B.x + 20; k++) {
               const f = foods[k];
