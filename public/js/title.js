@@ -23,7 +23,7 @@ export class TitleScene {
       x: -120 - i * 260,
       phase: i * 1.7,
     }));
-    // 캔버스 크기는 main.js의 fitNative가 정한다. 그림이 원본 픽셀 그대로 보이는 960×540까지만 커지고, 그림 해상도는 캔버스 비율에 맞춘다
+    // CSS가 캔버스를 화면에 꽉 채우고, 그림 해상도는 창 비율에 맞춰 바꾼다
     this.cw = W;
     this.ch = H;
     new ResizeObserver(() => this.fit()).observe(canvas);
