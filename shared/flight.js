@@ -5,7 +5,7 @@ import { clamp } from './util.js';
 
 export const DASH_VX = 1140;
 
-// 속도만 바꾼다. input은 { up, boost }, fx는 이번 순간 걸린 효과 { dashing, slow, heavy, glide }
+// 속도만 바꾼다. input은 { up, boost }, fx는 이번 순간 걸린 효과 { dashing, slow, heavy }
 export function steerFlyer(L, st, input, fx, dt) {
   const slowF = fx.slow ? 0.6 : 1;
   const target = input.boost ? st.maxSpeed * slowF : st.baseSpeed * slowF;
@@ -13,8 +13,8 @@ export function steerFlyer(L, st, input, fx, dt) {
   else if (L.vx < target) L.vx = Math.min(target, L.vx + st.accel * dt);
   else L.vx = Math.max(target, L.vx - (L.vx > st.maxSpeed ? st.decel * 3 : st.decel) * dt);
   if (input.up) L.vy -= st.lift * (fx.heavy ? 0.55 : 1) * dt;
-  else L.vy += st.gravity * (fx.glide ? 0.35 : 1) * dt;
-  L.vy = clamp(L.vy, -st.riseMax * (fx.heavy ? 0.6 : 1), st.fallMax * (fx.glide ? 0.38 : 1));
+  else L.vy += st.gravity * dt;
+  L.vy = clamp(L.vy, -st.riseMax * (fx.heavy ? 0.6 : 1), st.fallMax);
 }
 
 // 속도대로 옮긴다. 맵 위아래 끝 밖으로는 나가지 않는다

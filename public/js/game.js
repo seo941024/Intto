@@ -15,6 +15,20 @@ const W = RULES.view.w;
 const H = RULES.view.h;
 // 맵을 당겨 보는 배율과, 그때 화면에 보이는 맵 크기
 const Z = RULES.cameraZoom || 1;
+// 가속 게이지 채움 색. HP 채움의 초록 색상 100도를 파랑 198도로 돌린다
+const BOOST_HUE_TURN = 98;
+// 색상만 deg도 돌리고 채도와 밝기는 그대로 둔다
+function hueTurn(r, g, b, deg) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return [r, g, b];
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h = (((h * 60 + deg) % 360) + 360) % 360 / 60;
+  const x = d * (1 - Math.abs((h % 2) - 1));
+  const [a, bb, c] = h < 1 ? [d, x, 0] : h < 2 ? [x, d, 0] : h < 3 ? [0, d, x] : h < 4 ? [0, x, d] : h < 5 ? [x, 0, d] : [d, 0, x];
+  return [Math.round(a + min), Math.round(bb + min), Math.round(c + min)];
+}
 // 생명을 잃은 까닭별 알림. 여기 없는 까닭은 기술에 맞은 것이다
 const CRASH_TEXT = { terrain: '부딪힘', obstacle: '장애물에 부딪힘', hp: 'HP가 바닥남' };
 const VW = W / Z;
@@ -98,7 +112,7 @@ export class Game {
         L.ghost = true;
         sfx.ghost();
         // 기록이 끝나는 자리를 서버가 알도록 탈락을 알리기 전에 지금 상태를 한 번 더 보낸다
-        socket.emit('race:state', bodyState(L, this.input, performance.now()));
+        socket.emit('race:state', bodyState(L, performance.now()));
         socket.emit('race:final');
         // 혼자 남은 사람이 탈락하면 서버가 곧바로 레이스를 끝낸다. 그때는 고르는 창을 띄우지 않는다
         this.later(() => {
@@ -372,10 +386,11 @@ export class Game {
     const sp = this.spectating;
     if (sp && sp.cur) {
       const c = sp.cur;
-      return { lives: c.lv, hp: c.hp, maxHp: c.mhp || 1, ghost: c.ghost, dead: c.dead, dist: c.dist || 0, feathers: 0, slot: sp.slot || 0, ch: CHARACTER_BY_ID[sp.charId] || this.ch };
+      // 남의 가속 게이지는 받지 않으므로 boost는 비워 둔다
+      return { lives: c.lv, hp: c.hp, maxHp: c.mhp || 1, ghost: c.ghost, dead: c.dead, dist: c.dist || 0, feathers: 0, slot: sp.slot || 0, ch: CHARACTER_BY_ID[sp.charId] || this.ch, boost: null };
     }
     const L = this.L;
-    return { lives: L.lives, hp: L.hp, maxHp: L.maxHp, ghost: L.ghost, dead: L.dead, dist: bodyDist(L), feathers: L.feathers, slot: this.slot, ch: this.ch };
+    return { lives: L.lives, hp: L.hp, maxHp: L.maxHp, ghost: L.ghost, dead: L.dead, dist: bodyDist(L), feathers: L.feathers, slot: this.slot, ch: this.ch, boost: L.dead ? null : L.boostLeft / RULES.boostSec };
   }
 
   // 든 기술 쓰기. 마우스 오른쪽 버튼, Z, 두 손가락 터치
@@ -436,7 +451,7 @@ export class Game {
   sendState(ts) {
     if (ts - this.lastSend < 1000 / RULES.sendHz) return;
     this.lastSend = ts;
-    socket.volatile.emit('race:state', bodyState(this.L, this.input, performance.now()));
+    socket.volatile.emit('race:state', bodyState(this.L, performance.now()));
   }
 
   cleanup() {
@@ -850,7 +865,7 @@ export class Game {
     const L = this.L;
     if (!L.dead) {
       list.push({
-        p: this.me, x: L.x, y: L.y, anim: animOf(L, this.input, now), e: effFlags(L, now),
+        p: this.me, x: L.x, y: L.y, anim: animOf(L, now), e: effFlags(L, now),
         ghost: L.ghost, shield: L.shield, small: now < L.eff.small, self: true,
       });
     }
@@ -1128,7 +1143,8 @@ export class Game {
   }
 
   // 채움 막대를 ratio만큼 그린다. 양 끝 둥근 부분은 그대로 두고 가운데만 늘이고 줄여 짧아져도 끝이 둥글다
-  drawFill(name, x, y, ratio) {
+  // src는 HUD 그림과 같은 배치의 다른 원본. 가속 게이지는 색만 바꾼 원본을 넘긴다
+  drawFill(name, x, y, ratio, src = ART.hud.img) {
     const hud = ART.hud;
     const f = hud.frame(name);
     if (!f) return;
@@ -1139,13 +1155,36 @@ export class Game {
     const ctx = this.ctx;
     if (w <= cap * 2) {
       const half = Math.floor(w / 2);
-      ctx.drawImage(hud.img, f.sx, f.sy, half, f.sh, x, y, half * k, f.sh * k);
-      ctx.drawImage(hud.img, f.sx + full - (w - half), f.sy, w - half, f.sh, x + half * k, y, (w - half) * k, f.sh * k);
+      ctx.drawImage(src, f.sx, f.sy, half, f.sh, x, y, half * k, f.sh * k);
+      ctx.drawImage(src, f.sx + full - (w - half), f.sy, w - half, f.sh, x + half * k, y, (w - half) * k, f.sh * k);
       return;
     }
-    ctx.drawImage(hud.img, f.sx, f.sy, cap, f.sh, x, y, cap * k, f.sh * k);
-    ctx.drawImage(hud.img, f.sx + cap, f.sy, full - cap * 2, f.sh, x + cap * k, y, (w - cap * 2) * k, f.sh * k);
-    ctx.drawImage(hud.img, f.sx + full - cap, f.sy, cap, f.sh, x + (w - cap) * k, y, cap * k, f.sh * k);
+    ctx.drawImage(src, f.sx, f.sy, cap, f.sh, x, y, cap * k, f.sh * k);
+    ctx.drawImage(src, f.sx + cap, f.sy, full - cap * 2, f.sh, x + cap * k, y, (w - cap * 2) * k, f.sh * k);
+    ctx.drawImage(src, f.sx + full - cap, f.sy, cap, f.sh, x + (w - cap) * k, y, cap * k, f.sh * k);
+  }
+
+  // 가속 게이지 채움 원본. HP 채움 그림의 색상만 초록에서 파랑으로 돌리고 밝기와 명암은 그대로 둔다. 처음 한 번만 만든다
+  boostFillSrc() {
+    if (this.boostSrc) return this.boostSrc;
+    const hud = ART.hud;
+    const f = hud.frame('hpFill');
+    const c = document.createElement('canvas');
+    c.width = hud.img.width;
+    c.height = hud.img.height;
+    const g = c.getContext('2d');
+    g.drawImage(hud.img, f.sx, f.sy, f.sw, f.sh, f.sx, f.sy, f.sw, f.sh);
+    const d = g.getImageData(f.sx, f.sy, f.sw, f.sh);
+    const px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const [r, gr, b] = hueTurn(px[i], px[i + 1], px[i + 2], BOOST_HUE_TURN);
+      px[i] = r;
+      px[i + 1] = gr;
+      px[i + 2] = b;
+    }
+    g.putImageData(d, f.sx, f.sy);
+    this.boostSrc = c;
+    return c;
   }
 
   // 시안에서 오려 낸 숫자 글자로 쓴다. size는 S 순위표, M 타이머, L 거리
@@ -1195,9 +1234,17 @@ export class Game {
       const low = ratio <= 0.3 && Math.floor(now / 250) % 2 === 0;
       this.drawFill(low ? 'hpFillLow' : 'hpFill', hx + fx, hy + fy, ratio);
     }
+    // 가속 게이지: HP 막대와 같은 그림을 바로 아래에 두고 채움만 파랗게
+    if (V.boost != null) {
+      const gy = hy + hf.h + 2;
+      hud.drawAt(ctx, 'hpFrame', hx, gy);
+      if (V.boost > 0) this.drawFill('hpFill', hx + fx, gy + fy, V.boost, this.boostFillSrc());
+    }
     if (V.ghost) ui.drawAt(ctx, 'ghostIcon', hx + hf.w + 4, M);
     if (V.dead) ui.drawAt(ctx, 'skull', hx + hf.w + 4, M);
-    const dy0 = M + hs.h + 4;
+    // 거리는 가속 게이지 줄 아래에 둔다. 하트 아래에 두면 네 자리 거리가 게이지와 겹친다.
+    // 관전 중에 게이지가 없어도 자리를 그대로 두어 글자가 오르내리지 않게 한다
+    const dy0 = Math.max(M + hs.h + 4, hy + hf.h * 2 + 2 + 4);
     this.drawNum(`${Math.floor(V.dist)}m`, M, dy0, 'L');
     if (V.feathers > 0) {
       const fs = ui.size('featherIcon');

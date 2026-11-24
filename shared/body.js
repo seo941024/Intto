@@ -36,9 +36,10 @@ export function newBody(map, ch, color) {
     invUntil: 0, dashUntil: 0, obsCd: 0, hurtUntil: 0, shield: false,
     eff: { blind: 0, heavy: 0, shake: 0, slow: 0, glide: 0, small: 0 },
     shakeNext: 0, lastHit: null, niceIdx: 0, wasDashing: false,
+    boostLeft: RULES.boostSec, boosting: false, move: { up: false, boost: false },
     gemTaken: new Set(), gemAsked: new Map(), grabbed: new Set(), foodEaten: new Set(), featherTaken: new Set(),
     st, stFeathers: 0,
-    fx: { dashing: false, slow: false, heavy: false, glide: false },
+    fx: { dashing: false, slow: false, heavy: false },
   };
 }
 
@@ -57,7 +58,6 @@ export function bodyFx(B, now) {
   f.dashing = now < B.dashUntil;
   f.slow = now < B.eff.slow;
   f.heavy = now < B.eff.heavy;
-  f.glide = now < B.eff.glide;
   return f;
 }
 
@@ -86,7 +86,13 @@ export function stepBody(B, input, dt, t, now, h) {
   const fx = bodyFx(B, now);
   const dashing = fx.dashing;
 
-  steerFlyer(B, st, input, fx, dt);
+  // 가속 게이지. 누르는 동안 줄고, 떼고 있으면 그 두 배 시간에 다시 찬다. 남은 만큼 바로 쓸 수 있다
+  B.boosting = input.boost && B.boostLeft > 0;
+  if (B.boosting) B.boostLeft = Math.max(0, B.boostLeft - dt);
+  else if (!input.boost) B.boostLeft = Math.min(RULES.boostSec, B.boostLeft + (dt * RULES.boostSec) / RULES.boostRefillSec);
+  B.move.up = input.up;
+  B.move.boost = B.boosting;
+  steerFlyer(B, st, B.move, fx, dt);
   if (now < B.eff.shake && now > B.shakeNext) {
     B.vy += (Math.random() * 2 - 1) * 260;
     B.shakeNext = now + 160;
@@ -97,9 +103,9 @@ export function stepBody(B, input, dt, t, now, h) {
   if (B.wasDashing && !dashing && circleHitsTerrain(map, B.x, B.y, r)) recenter(B);
   B.wasDashing = dashing;
 
-  // 지형. 유령은 다치지 않고 땅 안쪽으로 밀려나기만 한다
+  // 지형. 유령과 활공 중인 몸은 다치지 않고 땅 안쪽으로 밀려나 미끄러지기만 한다
   if (!dashing && circleHitsTerrain(map, B.x, B.y, r)) {
-    if (B.ghost || now < B.invUntil) pushInside(B, r);
+    if (B.ghost || now < B.invUntil || now < B.eff.glide) pushInside(B, r);
     else if (B.shield) {
       B.shield = false;
       B.invUntil = now + 600;
@@ -270,10 +276,10 @@ export function loseLife(B, cause, now, h) {
   recenter(B);
 }
 
-export function animOf(B, input, now) {
+export function animOf(B, now) {
   if (B.ghost) return 'ghost';
   if (now < B.hurtUntil) return 'hurt';
-  if (now < B.dashUntil || (input.boost && B.vx > bodyStats(B).baseSpeed + 8)) return 'boost';
+  if (now < B.dashUntil || (B.boosting && B.vx > bodyStats(B).baseSpeed + 8)) return 'boost';
   return 'fly';
 }
 
@@ -286,7 +292,7 @@ export function effFlags(B, now) {
 }
 
 // 서버로 보내는 비행 상태 race:state
-export function bodyState(B, input, now) {
+export function bodyState(B, now) {
   return {
     x: Math.round(B.x * 10) / 10,
     y: Math.round(B.y * 10) / 10,
@@ -301,7 +307,7 @@ export function bodyState(B, input, now) {
     inv: now < B.invUntil || now < B.dashUntil,
     shield: B.shield,
     small: now < B.eff.small,
-    a: animOf(B, input, now),
+    a: animOf(B, now),
     e: effFlags(B, now),
   };
 }

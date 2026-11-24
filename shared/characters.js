@@ -12,7 +12,7 @@ export const SKILLS = {
   repair: { name: '자가수리', desc: 'HP 60 회복', kind: 'self', heal: 60 },
   oil: { name: '기름', desc: '뒤에 기름 구름을 남김, 닿은 상대는 3초 동안 무거워짐', kind: 'puddle', effect: 'heavy', ms: 3000, lifeMs: 9000, r: 33 },
   acorn: { name: '도토리 폭탄', desc: '아래로 떨어뜨리는 폭탄을 던져, 피해 30을 줌', kind: 'proj', proj: 'acorn', count: 1, dmg: 30, speed: 60, gravity: 780 },
-  glide: { name: '활공', desc: '5초 동안 천천히 떨어짐', kind: 'self', ms: 5000 },
+  glide: { name: '활공', desc: '5초 동안 땅이나 천장에 닿아도 생명을 잃지 않고 미끄러져 지나감', kind: 'self', ms: 5000 },
   whirl: { name: '회오리', desc: '앞에 있는 상대를 2.5초 동안 흔들리게 함', kind: 'debuff', effect: 'shake', ms: 2500, area: 'ahead', range: 690 },
   paper: { name: '종이 표창', desc: '표창 세 개를 부채꼴로 던짐, 한 발당 피해 14를 줌', kind: 'proj', proj: 'paper', count: 3, spread: 0.26, dmg: 14, speed: 510 },
   fold: { name: '납작 접기', desc: '6초 동안 몸이 절반으로 작아짐', kind: 'self', ms: 6000 },

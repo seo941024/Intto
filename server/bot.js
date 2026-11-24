@@ -48,8 +48,8 @@ function plan(R, t, now) {
   const r = bodyRadius(R, now) + R.margin;
   const obs = R.map.obstacles;
   const gems = R.map.gems;
-  // 가속은 마음먹은 동안만 고려한다. 사람처럼 늘 꾹 누르고 있지는 않는다
-  const boosts = R.boostOn ? [true, false] : [false];
+  // 가속은 마음먹은 동안, 게이지가 남아 있을 때만 고려한다. 사람처럼 늘 꾹 누르고 있지는 않는다
+  const boosts = R.boostOn && R.boostLeft > 0 ? [true, false] : [false];
   const hungry = R.hp < R.maxHp * 0.7;
   const foods = R.map.foods;
   const items = R.map.skills;
@@ -119,7 +119,7 @@ function finalOut(bot) {
   const R = bot.race;
   if (!R || R.dead) return;
   // 기록이 끝나는 자리를 서버가 알도록 탈락을 알리기 전에 지금 상태를 한 번 더 보낸다
-  bot.s.emit('race:state', bodyState(R, R.input, Date.now()));
+  bot.s.emit('race:state', bodyState(R, Date.now()));
   R.dead = true;
   bot.s.emit('race:final');
   bot.log(bot.name, '탈락');
@@ -182,7 +182,7 @@ function startRace(bot, init, log) {
     }
     if (now - R.sendAt >= 1000 / RULES.sendHz) {
       R.sendAt = now;
-      bot.s.volatile.emit('race:state', bodyState(R, R.input, now));
+      bot.s.volatile.emit('race:state', bodyState(R, now));
     }
   }, 1000 / 60);
 }

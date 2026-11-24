@@ -7,7 +7,7 @@ export const RULES = {
   minPlayers: 2,
   teamModePlayers: 4, // 2:2 팀전은 4명일 때만
 
-  // 화면 좌표. 그림은 이 크기를 기준으로 만들고, 실제 화면 해상도에 맞춰 늘리거나 줄여 그린다
+  // 화면 좌표. 그림은 이 크기에서 원본 픽셀 그대로 보이게 만들고, 실제 화면에는 이 크기까지만 키워 그린다
   view: { w: 960, h: 540 },
   cameraLead: 200, // 화면 왼쪽에서 내 캐릭터까지, 화면 픽셀
   cameraZoom: 1.5, // 맵을 이 배율로 당겨 본다. 화면에는 맵의 640×360만큼이 보인다
@@ -40,6 +40,11 @@ export const RULES = {
   redGemScore: 50,
   skillItemEveryM: [60, 100], // 기술 아이콘 간격
   skillItemWeights: [30, 20, 20, 15, 15], // 1~5칸이 나올 비율
+
+  // X 가속 게이지. 가득 차면 boostSec초 동안 가속하고, 떼고 있으면 boostRefillSec초에 다시 가득 찬다.
+  // 조금이라도 남아 있으면 바로 쓸 수 있다
+  boostSec: 6,
+  boostRefillSec: 12,
 
   // 깃털
   featherSpeedBonus: 10.5, // px/s
