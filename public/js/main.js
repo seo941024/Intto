@@ -45,8 +45,27 @@ const store = {
 };
 
 // ── 공용 ──
+// 그림은 960×540 화면에서 원본 픽셀 그대로 보이게 만들었다. 그보다 크게 늘리면 흐려지므로 거기까지만 키우고 남는 곳은 어두운 여백으로 둔다.
+// 기기 픽셀이 CSS 픽셀보다 촘촘한 화면에서는 기기 픽셀 기준 정수배까지만 키운다. 첫 화면과 게임 화면이 같이 쓴다
+function fitNative(box, canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const max = Math.max(1, Math.floor(dpr)) / dpr;
+  const k = Math.min(window.innerWidth / RULES.view.w, window.innerHeight / RULES.view.h, max);
+  // 높이는 폭에서 계산한다. 따로 내리면 캔버스 픽셀 높이와 1px 어긋나 한 줄이 빠지거나 겹쳐 보인다.
+  // 0.8 같은 배율은 곱하면 767.999…가 되어 1px 작아지므로 아주 작은 값을 더해 내린다
+  const w = Math.floor(RULES.view.w * k + 1e-6);
+  const h = Math.round((w * RULES.view.h) / RULES.view.w);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  // 가운데에 두되 기기 픽셀 경계에 맞춘다. 반 픽셀에 걸치면 캔버스 전체가 다시 흐려진다
+  box.style.marginLeft = Math.floor(((window.innerWidth - w) / 2) * dpr) / dpr + 'px';
+  box.style.marginTop = Math.floor(((window.innerHeight - h) / 2) * dpr) / dpr + 'px';
+}
+const fitTitle = () => fitNative($('#title-stage'), $('#title-canvas'));
+
 function show(id) {
   S.screen = id;
+  if (id === 'title') fitTitle();
   if (id === 'title') titleScene.start();
   else titleScene.stop();
   // 배경음: 첫 화면은 첫 화면 곡, 로비와 대기실은 로비 곡. 경기 곡은 startRace에서 맵에 맞춰 튼다
@@ -161,6 +180,7 @@ function initTitle() {
     $('#in-name').value = S.name || store.get('intto.name') || '';
     show('title');
   };
+  fitTitle();
   titleScene.start();
   // 브라우저는 처음 누르기 전에 소리를 막는다. PRESS START를 누르는 그 입력에서 첫 화면 곡을 틀고 이름 칸을 연다
   const begin = () => {
@@ -503,15 +523,7 @@ function addChat(logEl, m) {
 }
 
 // ── 레이스 ──
-function fitStage() {
-  const cv = $('#game');
-  // 창을 꽉 채우도록 16:9 그대로 키운다. 정수배로만 키우면 창이 2배에 못 미칠 때 1배로 작게 남는다
-  const k = Math.min(window.innerWidth / RULES.view.w, window.innerHeight / RULES.view.h);
-  // 높이는 폭에서 계산한다. 따로 내리면 캔버스 픽셀 높이와 1px 어긋나 한 줄이 빠지거나 겹쳐 보인다
-  const w = Math.floor(RULES.view.w * k);
-  cv.style.width = w + 'px';
-  cv.style.height = Math.round((w * RULES.view.h) / RULES.view.w) + 'px';
-}
+const fitStage = () => fitNative($('#stage'), $('#game'));
 
 const gameChat = {
   typing: false,
@@ -663,6 +675,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('resize', () => {
   if (S.screen === 'game') fitStage();
+  else if (S.screen === 'title') fitTitle();
 });
 $('#btn-back').onclick = () => {
   sfx.click();
