@@ -4,9 +4,11 @@
   art_inbox/ui_icons_v1.png  왕관, 체크, A·B 깃발, 별 셋, 유령, 해골, 깃털
 출력
   public/assets/ui/panel.png, button*.png, card*.png, input.png, lobby_bg.png   CSS border-image로 늘려 쓰는 틀
-  public/assets/ui/ui.png, ui.json   아이콘 열 개를 새 그림으로 바꿔 끼운다
-  public/assets/ui/ui_kit.json       틀마다 자르는 폭. CSS에 적는 값
+  public/assets/ui/ui.png, ui.json   아이콘 열 개만 담은 아틀라스. 게임이 쓰는 프레임 이름 그대로
+  tools/art/ui_kit.json              틀마다 자르는 폭. CSS에 옮겨 적는 참고값이고 게임은 읽지 않는다
 틀은 비율을 바꾸지 않고 FRAME_K로 줄인 뒤, 가운데가 한 색으로 고르게 시작하는 자리를 잘라 쓰는 폭으로 잰다.
+아이콘은 res 1920으로 넣어 게임이 0.5배로 그린다. 높이 ICON_H는 res가 없던 예전 아틀라스 11픽셀의 세 배라
+화면 크기는 예전에 1.5배로 그리던 크기와 같다.
 사용
   python tools/art/make_ui_kit.py
 """
@@ -18,7 +20,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
+from artlib import unkey, shrink, crop_box  # noqa: E402
+from pack_concept import Packer, write_atlas  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -26,8 +29,10 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[2]
 INBOX = ROOT / "art_inbox"
 UI = ROOT / "public" / "assets" / "ui"
+SLICES = Path(__file__).resolve().parent / "ui_kit.json"
 FRAME_K = 0.4  # 틀 그림을 줄이는 배율
-ICON_H = 11  # 아이콘 높이, ui 아틀라스 픽셀. 게임에서는 1.5배, 대기실에서는 2배로 그린다
+ICON_RES = 1920  # 아이콘 아틀라스 res. 게임은 960 / 1920 = 0.5배로 그린다
+ICON_H = 33  # 아이콘 높이, 아틀라스 픽셀. 게임 화면 16.5픽셀, 대기실은 4/3배 더 키워 22픽셀
 
 # 부품 상자: 원본 좌표 x, y, w, h
 KIT = {
@@ -50,15 +55,10 @@ ICONS = {
 }
 
 
-def crop(keyed, box, pad=6):
+def crop(keyed, box):
+    """x, y, w, h 상자를 6픽셀 여유를 두고 잘라 그림이 있는 자리만 남긴다"""
     x, y, w, h = box
-    a = keyed[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad]
-    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-    return img.crop(img.getbbox())
-
-
-def shrink(img, k):
-    return img.convert("RGBa").resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.Resampling.LANCZOS).convert("RGBA")
+    return crop_box(keyed, (x, y, x + w, y + h), pad=6)
 
 
 def seamless_tile(img, n):
@@ -89,13 +89,9 @@ def slice_width(img):
 def main():
     kit = unkey(np.array(Image.open(INBOX / "ui_kit_v1.png").convert("RGB")))
     raw = Image.open(INBOX / "ui_kit_v1.png").convert("RGB")
-    backup = ROOT / "art_inbox" / "out" / "placeholder_backup" / "ui"
-    backup.mkdir(parents=True, exist_ok=True)
     slices = {}
     for name, box in KIT.items():
         img = shrink(crop(kit, box), FRAME_K)
-        if not (backup / f"{name}.png").exists() and (UI / f"{name}.png").exists():
-            (backup / f"{name}.png").write_bytes((UI / f"{name}.png").read_bytes())
         img.save(UI / f"{name}.png")
         slices[name] = {"slice": slice_width(img), "size": img.size}
         print(f"  {name}: {img.size}, 자르는 폭 {slices[name]['slice']}")
@@ -104,35 +100,19 @@ def main():
     tile = raw.crop((x + 4, y + 4, x + w - 4, y + h - 4))
     tile = tile.resize((round(tile.width * 0.5), round(tile.height * 0.5)), Image.Resampling.LANCZOS)
     tile = seamless_tile(tile, 24)
-    if not (backup / "lobby_bg.png").exists():
-        (backup / "lobby_bg.png").write_bytes((UI / "lobby_bg.png").read_bytes())
     tile.save(UI / "lobby_bg.png")
-    (UI / "ui_kit.json").write_text(json.dumps(slices, ensure_ascii=False, indent=2), encoding="utf-8")
+    SLICES.write_text(json.dumps(slices, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  바탕 무늬 {tile.size}, 자르는 폭 저장 {SLICES}")
 
-    # 아이콘: ui 아틀라스 아래에 새 그림을 붙이고 그 이름의 프레임만 새 자리로 바꾼다
+    # 아이콘: 비율을 지켜 높이 ICON_H로 줄여 한 줄로 늘어놓는다
     icons = unkey(np.array(Image.open(INBOX / "ui_icons_v1.png").convert("RGB")))
-    spec = json.loads((UI / "ui.json").read_text(encoding="utf-8"))
-    sheet = Image.open(UI / spec["image"]).convert("RGBA")
-    if not (backup / "ui.png").exists():
-        sheet.save(backup / "ui.png")
-        (backup / "ui.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-    else:
-        # 다시 돌릴 때는 원래 아틀라스에서 시작한다
-        sheet = Image.open(backup / "ui.png").convert("RGBA")
-        spec = json.loads((backup / "ui.json").read_text(encoding="utf-8"))
-    parts = {n: shrink(crop(icons, b), ICON_H / b[3]) for n, b in ICONS.items()}
-    y0 = sheet.height + 2
-    width = max(sheet.width, sum(p.width + 2 for p in parts.values()))
-    out = Image.new("RGBA", (width, y0 + max(p.height for p in parts.values())), (0, 0, 0, 0))
-    out.alpha_composite(sheet, (0, 0))
-    x = 0
-    for n, p in parts.items():
-        out.alpha_composite(p, (x, y0))
-        spec["animations"][n] = {"frames": [[x, y0, p.width, p.height]]}
-        x += p.width + 2
-    out.save(UI / spec["image"])
-    (UI / "ui.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"아이콘 {len(parts)}개 바꿈, 바탕 무늬 {tile.size}")
+    p = Packer(1024)
+    anims = {}
+    for name, box in ICONS.items():
+        img = shrink(crop(icons, box), ICON_H / box[3])
+        anims[name] = {"frames": [p.add(img)]}
+        print(f"  {name}: {img.width}×{img.height}")
+    write_atlas(UI, "ui", p, anims, res=ICON_RES)
 
 
 if __name__ == "__main__":

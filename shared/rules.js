@@ -7,13 +7,12 @@ export const RULES = {
   minPlayers: 2,
   teamModePlayers: 4, // 2:2 팀전은 4명일 때만
 
-  // 화면, 그림 1픽셀 = 좌표 1단위. 1080p 모니터에서 정확히 2배
+  // 화면 좌표. 그림은 이 크기를 기준으로 만들고, 실제 화면 해상도에 맞춰 늘리거나 줄여 그린다
   view: { w: 960, h: 540 },
   cameraLead: 200, // 화면 왼쪽에서 내 캐릭터까지, 화면 픽셀
   cameraZoom: 1.5, // 맵을 이 배율로 당겨 본다. 화면에는 맵의 640×360만큼이 보인다
   worldH: 360, // 맵 세로 크기. 화면 높이 540을 배율로 나눈 값이라 맵 위아래가 한 화면에 다 들어온다
   pxPerMeter: 15,
-  minimapRangeM: 500, // 미니맵 ±500m, 나무위키 윙또 문서
 
   // 레이스
   raceMs: 150_000, // 2분 30초, 나무위키 윙또 문서
@@ -31,10 +30,14 @@ export const RULES = {
   lifeLostInvulnMs: 2_000,
   hitInvulnMs: 900,
   killCreditMs: 3_000, // 기술에 맞은 뒤 이 시간 안에 생명을 잃으면 KILL
+  bodyR: 12, // 캐릭터 몸의 충돌 반지름
+  bodyRSmall: 6, // 종이접기로 작아졌을 때
 
   // 보석은 점수, 기술은 필드의 기술 아이콘을 먹어 하나 든다
-  skillSlots: 5,
   redGemChance: 0.03,
+  // 점수 = 날아간 거리 m + 보석 점수. 개인전 순위와 팀전 합산에 쓴다
+  gemScore: 10,
+  redGemScore: 50,
   skillItemEveryM: [60, 100], // 기술 아이콘 간격
   skillItemWeights: [30, 20, 20, 15, 15], // 1~5칸이 나올 비율
 
@@ -60,8 +63,16 @@ export function deriveStats(stats, feathers = 0) {
     gravity: 560,
     fallMax: 260,
     decel: 260,
-    radius: 12,
   };
+}
+
+// 방을 시작할 수 없는 까닭. 서버와 브라우저가 같은 순서로 따지고, 보여 줄 문구는 각자 고른다
+export function startProblem(players, hostId, mode) {
+  if (players.length < RULES.minPlayers) return 'few';
+  if (mode === 'team' && players.length !== RULES.teamModePlayers) return 'teamSize';
+  if (mode === 'team' && players.filter((p) => p.team === 'A').length !== RULES.teamModePlayers / 2) return 'teamSplit';
+  if (players.some((p) => p.id !== hostId && !p.ready)) return 'ready';
+  return null;
 }
 
 export const PLAYER_COLORS = ['#e43b44', '#0099db', '#63c74d', '#feae34'];

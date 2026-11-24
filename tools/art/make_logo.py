@@ -16,7 +16,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey, pieces  # noqa: E402
+from artlib import unkey, shrink, to_img  # noqa: E402
+from import_scene import pieces  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -30,14 +31,6 @@ BOT_NAMES = ["star", "sparkle", "sparkleS", "cloud", "cloudS"]
 
 # 부품 배치. 글자 바닥선이 y=0, "인" 왼쪽 끝이 x=0
 GAP = 8
-
-
-def to_img(a):
-    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-
-
-def shrink(img, k):
-    return img.convert("RGBa").resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def main():
@@ -116,10 +109,6 @@ def main():
     comp = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
     for n, bx, by in boxes:
         comp.alpha_composite(parts[n], (bx - x0, by - y0))
-    backup = ROOT / "art_inbox" / "out" / "placeholder_backup" / "ui"
-    backup.mkdir(parents=True, exist_ok=True)
-    if not (backup / "logo.png").exists() and (UI / "logo.png").exists():
-        (backup / "logo.png").write_bytes((UI / "logo.png").read_bytes())
     shrink(comp, HEADER_K).save(UI / "logo.png")
     print("부품", {n: (w[n], h[n]) for n in order})
     print(f"저장 {UI / 'logo_parts.png'} {sheet.size}, {UI / 'logo.png'} {shrink(comp, HEADER_K).size}")

@@ -1,10 +1,13 @@
-"""구름섬 시안 한 장에서 게임에 쓸 조각을 오려 낸다.
+"""구름섬 시안 한 장에서 물체 조각을 오려 낸다.
 
 시안 그림은 굵은 외곽선이 있어서, 그 선을 벽으로 두고 바깥에서부터 배경을 채워 지우면 물체만 남는다.
-HUD 판에 박힌 글자와 그림은 판 안쪽 색을 좌우에서 이어 그려 지운다.
-결과는 시안 크기 그대로 art_inbox/out/cut/ 에, 게임 크기 960 기준으로 줄인 것은 art_inbox/out/cut960/ 에 둔다.
+결과는 시안 크기 그대로 art_inbox/out/cut/ 에 둔다. pack_concept.py가 그중 보석 gem_blue_a·gem_red, 고기 meat,
+깃털 feather, 바위 rock, 풍선 balloon_a 여섯 장을 읽는다. git에는 이 여섯 장만 올린다.
+시안의 HUD 판·숫자 조각과 게임 크기로 줄인 art_inbox/out/cut960/ 도 함께 만들지만 지금은 쓰는 곳이 없다.
+HUD는 make_hud.py가 따로 받은 그림으로 만든다.
 사용
   python tools/art/cut_concept.py
+  python tools/art/pack_concept.py
 """
 import sys
 from collections import deque
@@ -12,6 +15,9 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artlib import shrink, lum, dilate  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -60,18 +66,6 @@ ERASE = {
     "slot": [(43, 826, 104, 898)],
     "slot_on": [(250, 826, 318, 898)],
 }
-
-
-def lum(a):
-    return 0.3 * a[..., 0] + 0.59 * a[..., 1] + 0.11 * a[..., 2]
-
-
-def dilate(m, r=1):
-    g = m.copy()
-    for dy in range(-r, r + 1):
-        for dx in range(-r, r + 1):
-            g |= np.roll(np.roll(m, dy, 0), dx, 1)
-    return g
 
 
 def outline_cut(a, thr, grow):
@@ -124,17 +118,10 @@ def erase_rows(a, box, origin, vertical=False):
             a[y, x] = h
 
 
-def to_game(img):
-    """알파를 곱한 상태로 줄여 가장자리에 하늘색이 번지지 않게 한다"""
-    w = max(1, round(img.width * GAME_K))
-    h = max(1, round(img.height * GAME_K))
-    return img.convert("RGBa").resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
-
-
 def save(name, rgba):
     img = Image.fromarray(rgba)
     img.save(OUT / f"{name}.png")
-    to_game(img).save(OUT960 / f"{name}.png")
+    shrink(img, GAME_K).save(OUT960 / f"{name}.png")
 
 
 def hp_parts(src):
@@ -252,7 +239,6 @@ def rounded_mask(h, w, box, r):
 SLOT_CROP_W, SLOT_CROP_H, SLOT_Y = 112, 117, 805
 SLOT_X = [18, 123, 228, 333, 438]  # 3번째가 고른 칸
 SLOT_BOX = (7, 9, 104, 107)  # 자른 칸 안에서 바깥 외곽선 상자
-SLOT_R = 16
 SLOT_INSET = 16  # 테두리와 안쪽 외곽선 두께, 이 안쪽이 아이콘 자리
 
 
@@ -326,47 +312,6 @@ def make_slots(src):
     print("  slot, slot_on")
 
 
-def slot_on():
-    """빈 기술칸 테두리를 금색으로 바꾸고 바깥에 주황 빛을 둘러 고른 칸 모양을 만든다.
-    시안의 고른 칸은 어두운 외곽선이 없어 그대로는 오려지지 않는다"""
-    base = np.array(Image.open(OUT / "slot.png").convert("RGBA"))
-    a = base[..., 3] > 0
-    h, w = a.shape
-    # 가장자리에서의 거리
-    dist = np.full((h, w), 99)
-    cur = a.copy()
-    for d in range(12):
-        inner = cur & ~dilate(~cur, 1)
-        dist[cur & ~inner] = d
-        cur = inner
-    gold = np.array([[40, 22, 10], [150, 70, 20], [235, 140, 30], [255, 205, 70], [255, 245, 170]], dtype=float)
-    out = base.copy()
-    ring = a & (dist <= 9)
-    L = lum(base[..., :3].astype(float)) / 255
-    idx = np.clip(L * (len(gold) - 1), 0, len(gold) - 1)
-    lo = np.floor(idx).astype(int)
-    hi = np.minimum(lo + 1, len(gold) - 1)
-    t = (idx - lo)[..., None]
-    col = gold[lo] * (1 - t) + gold[hi] * t
-    out[..., :3][ring] = col[ring].astype(np.uint8)
-    # 바깥 빛 4픽셀
-    pad = 6
-    big = np.zeros((h + pad * 2, w + pad * 2, 4), dtype=np.uint8)
-    am = np.zeros((h + pad * 2, w + pad * 2), dtype=bool)
-    am[pad:pad + h, pad:pad + w] = a
-    prev = am
-    for k, alpha in enumerate((150, 100, 60, 30)):
-        grown = prev.copy()
-        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            grown |= np.roll(np.roll(prev, dy, 0), dx, 1)
-        g = grown & ~prev
-        big[g] = (255, 170, 40, alpha)
-        prev = prev | g
-    big[pad:pad + h, pad:pad + w][a] = out[a]
-    save("slot_on", big)
-    print("  slot_on: 빈 칸 테두리를 금색으로 바꿔 만듦")
-
-
 def recolor_like(glyph, ref):
     """노란 글자를 흰 글자 색으로 바꾼다. 밝기 순서대로 흰 글자의 색을 맞춘다"""
     g = glyph.copy()
@@ -424,7 +369,7 @@ def main():
             p = OUT / f"digit_small_{ch}.png"
             if not p.exists() or i == 0:
                 Image.fromarray(g).save(p)
-                to_game(Image.fromarray(g)).save(OUT960 / f"digit_small_{ch}.png")
+                shrink(Image.fromarray(g), GAME_K).save(OUT960 / f"digit_small_{ch}.png")
     # 4와 6은 흰 글자에 없어서 1위 노란 숫자 1436에서 가져와 흰 글자 색으로 바꾼다
     yellow = digits(src, (1538, 36, 1630, 80), 150, "순위 숫자 1436")
     ref = np.array(Image.open(OUT / "digit_small_3.png").convert("RGBA"))
@@ -432,7 +377,7 @@ def main():
         if ch in "46":
             w = recolor_like(g, ref)
             Image.fromarray(w).save(OUT / f"digit_small_{ch}.png")
-            to_game(Image.fromarray(w)).save(OUT960 / f"digit_small_{ch}.png")
+            shrink(Image.fromarray(w), GAME_K).save(OUT960 / f"digit_small_{ch}.png")
     # 쌍점은 타이머 글자 00:37.25의 세 번째 글자에서 가져와 흰 숫자 색으로 맞춘다
     tg = digits(src, (736, 30, 1006, 88), 170, "타이머 00:37.25")
     if len(tg) >= 3:

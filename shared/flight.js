@@ -1,10 +1,9 @@
 // 비행 계산. 브라우저의 내 캐릭터와 서버의 봇이 같은 규칙으로 난다.
-// L은 x, y, vx, vy, ghost, ghostDist를 가진 몸, st는 deriveStats 결과
+// L은 x, y, vx, vy를 가진 몸, st는 deriveStats 결과. 유령으로 나는 브라우저 몸은 ghost와 ghostDist도 가진다
 import { RULES } from './rules.js';
+import { clamp } from './util.js';
 
 export const DASH_VX = 1140;
-
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 // 속도만 바꾼다. input은 { up, boost }, fx는 이번 순간 걸린 효과 { dashing, slow, heavy, glide }
 export function steerFlyer(L, st, input, fx, dt) {

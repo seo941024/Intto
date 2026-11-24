@@ -1,9 +1,9 @@
 // 화면 전환, 로비·방 UI, 레이스 시작과 결과
-import { socket, request, syncClock } from './net.js';
+import { socket, request } from './net.js';
 import { ART, loadCommonArt, loadWorld, loadImage } from './assets.js';
 import { CHARACTERS, CHARACTER_BY_ID, SKILLS, STAT_LABELS } from '/shared/characters.js';
 import { MAPS, MAP_BY_ID } from '/shared/mapgen.js';
-import { RULES, PLAYER_COLORS } from '/shared/rules.js';
+import { RULES, PLAYER_COLORS, startProblem } from '/shared/rules.js';
 import { Game } from './game.js';
 import { TitleScene } from './title.js';
 import { sfx, unlockAudio, toggleMute, isMuted } from './sfx.js';
@@ -79,12 +79,15 @@ function atlasCanvas(atlas, name, scale = 1, opt = {}) {
   c.width = Math.max(1, Math.round(cw * dpr));
   c.height = Math.max(1, Math.round(ch * dpr));
   const ctx = c.getContext('2d');
-  ctx.imageSmoothingEnabled = c.width < f.sw;
+  // 줄이거나 정수배가 아닌 배율로 키울 때는 부드럽게 그린다. 딱 정수배로 키울 때만 칸을 그대로 늘린다
+  const r = c.width / f.sw;
+  const smooth = r < 1 || Math.abs(r - Math.round(r)) > 0.02;
+  ctx.imageSmoothingEnabled = smooth;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(atlas.img, f.sx, f.sy, f.sw, f.sh, 0, 0, c.width, c.height);
   c.style.width = cw + 'px';
   c.style.height = ch + 'px';
-  if (c.width < f.sw) c.style.imageRendering = 'auto';
+  if (smooth) c.style.imageRendering = 'auto';
   return c;
 }
 
@@ -106,9 +109,9 @@ function pips(value) {
   return box;
 }
 
-// 로고 같은 단독 PNG를 정수배로 키운다. 그림이 없으면 글자 로고로 바꾼다
+// 위쪽 작은 로고는 두 배로 그린 그림을 절반으로 줄여 보인다. 그림이 없으면 글자 로고로 바꾼다
 function scaleImages() {
-  for (const [sel, k] of [['.logo', 2], ['.logo-sm', 0.5]]) {
+  for (const [sel, k] of [['.logo-sm', 0.5]]) {
     document.querySelectorAll(sel).forEach((img) => {
       const apply = () => {
         img.style.width = img.naturalWidth * k + 'px';
@@ -127,10 +130,10 @@ function scaleImages() {
   }
 }
 
-// 테두리 PNG를 읽을 수 있으면 대체 스타일을 끈다
+// 테두리 PNG를 읽지 못할 때만 대체 스타일을 켠다. 처음부터 켜 두면 그림이 뜨기 전에 잠깐 다른 모양이 보인다
 async function checkUiArt() {
   const ok = await loadImage('/assets/ui/button.png');
-  document.body.classList.toggle('no-ui-art', !ok);
+  if (!ok) document.body.classList.add('no-ui-art');
 }
 
 // ── 첫 화면 ──
@@ -150,7 +153,8 @@ function initTitle() {
     show('lobby');
   };
   $('#btn-enter').onclick = enter;
-  $('#in-name').addEventListener('keydown', (e) => e.key === 'Enter' && enter());
+  // 한글 조합 중에 누른 Enter는 건너뛴다. 조합이 끝나며 한 번 더 들어와 두 번 처리되는 것을 막는다
+  $('#in-name').addEventListener('keydown', (e) => e.key === 'Enter' && !e.isComposing && enter());
   // 로비에서 처음 화면으로. 이름은 칸에 그대로 남아 바로 다시 들어올 수 있다
   $('#btn-home').onclick = () => {
     sfx.click();
@@ -176,6 +180,16 @@ function initTitle() {
 const titleScene = new TitleScene($('#title-canvas'));
 
 // ── 로비 ──
+// 랜덤 맵 고르기 칸
+const RANDOM_MAP = { id: 'random', name: '랜덤', desc: '세 맵 중 무작위로 하나를 선택' };
+// 시작할 수 없는 까닭별 안내. 까닭은 서버와 같은 startProblem으로 고른다
+const START_HINT = {
+  few: `${RULES.minPlayers}명 이상 모여야 시작할 수 있어요!`,
+  teamSize: `팀전은 ${RULES.teamModePlayers}명이 모여야 할 수 있어요!`,
+  teamSplit: `팀을 ${RULES.teamModePlayers / 2}명씩 나눠야 시작할 수 있어요!`,
+  ready: '모두 준비해야 시작할 수 있어요!',
+};
+
 const KEY_LABELS = {
   keyMouseL: '좌클릭', keyMouseR: '우클릭', keyUp: '↑', keyZ: 'Z', keyX: 'X',
   keyEnter: 'Enter', keyM: 'M',
@@ -286,7 +300,7 @@ function initRoom() {
   };
   const chatIn = $('#room-chat-in');
   chatIn.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && chatIn.value.trim()) {
+    if (e.key === 'Enter' && !e.isComposing && chatIn.value.trim()) {
       socket.emit('chat', chatIn.value);
       chatIn.value = '';
     }
@@ -389,7 +403,7 @@ function renderRoom() {
   // 맵
   const tabs = $('#map-tabs');
   tabs.innerHTML = '';
-  for (const m of [...MAPS, { id: 'random', name: '랜덤', desc: '세 맵 중 무작위로 하나를 선택' }]) {
+  for (const m of [...MAPS, RANDOM_MAP]) {
     const b = el('button', 'pix-btn' + (r.mapId === m.id ? ' on' : ''), m.name);
     b.disabled = !isHost && r.mapId !== m.id;
     b.onclick = () => {
@@ -400,7 +414,7 @@ function renderRoom() {
     tabs.append(b);
   }
   $('#map-preview').src = r.mapId === 'random' ? '/assets/ui/map_random.png' : `/assets/world/${r.mapId}/preview.png`;
-  $('#map-desc').textContent = r.mapId === 'random' ? '세 맵 중 무작위로 하나를 선택' : MAP_BY_ID[r.mapId]?.desc ?? '';
+  $('#map-desc').textContent = r.mapId === 'random' ? RANDOM_MAP.desc : MAP_BY_ID[r.mapId]?.desc ?? '';
 
   // 방식
   const modes = $('#mode-tabs');
@@ -433,12 +447,8 @@ function renderRoom() {
 
   // 시작·준비
   const btn = $('#btn-main');
-  let hint = '';
-  const n = r.players.length;
-  if (n < RULES.minPlayers) hint = `${RULES.minPlayers}명 이상 모여야 시작할 수 있어요!`;
-  else if (r.mode === 'team' && n !== 4) hint = '팀전은 4명이 모여야 할 수 있어요!';
-  else if (r.mode === 'team' && r.players.filter((p) => p.team === 'A').length !== 2) hint = '팀을 2명씩 나눠야 시작할 수 있어요!';
-  else if (r.players.some((p) => p.id !== r.hostId && !p.ready)) hint = '모두 준비해야 시작할 수 있어요!';
+  const why = startProblem(r.players, r.hostId, r.mode);
+  const hint = why ? START_HINT[why] : '';
   if (isHost) {
     btn.textContent = '시작';
     btn.disabled = !!hint;
@@ -497,8 +507,10 @@ function fitStage() {
   const cv = $('#game');
   // 창을 꽉 채우도록 16:9 그대로 키운다. 정수배로만 키우면 창이 2배에 못 미칠 때 1배로 작게 남는다
   const k = Math.min(window.innerWidth / RULES.view.w, window.innerHeight / RULES.view.h);
-  cv.style.width = Math.floor(RULES.view.w * k) + 'px';
-  cv.style.height = Math.floor(RULES.view.h * k) + 'px';
+  // 높이는 폭에서 계산한다. 따로 내리면 캔버스 픽셀 높이와 1px 어긋나 한 줄이 빠지거나 겹쳐 보인다
+  const w = Math.floor(RULES.view.w * k);
+  cv.style.width = w + 'px';
+  cv.style.height = Math.round((w * RULES.view.h) / RULES.view.w) + 'px';
 }
 
 const gameChat = {
@@ -512,7 +524,6 @@ const gameChat = {
     this.typing = false;
     $('#game-chat').classList.remove('typing');
     $('#game-chat-in').blur();
-    $('#game').focus();
   },
 };
 
@@ -522,6 +533,7 @@ async function startRace(init) {
   $('#result').classList.add('hidden');
   $('#ghost-choice').classList.add('hidden');
   $('#game-chat-log').innerHTML = '';
+  gameChat.close();
   show('game');
   music.play(init.mapId);
   fitStage();
@@ -537,7 +549,10 @@ function showResults(d) {
   const body = $('#result-body');
   body.innerHTML = '';
   let title = '결과';
-  if (d.mode === 'team') title = d.winnerTeam === 'draw' ? '무승부' : `${d.winnerTeam}팀 승리`;
+  if (d.mode === 'team') {
+    const ts = d.teamScores || { A: 0, B: 0 };
+    title = `${d.winnerTeam === 'draw' ? '무승부' : `${d.winnerTeam}팀 승리`} · A팀 ${ts.A} : B팀 ${ts.B}`;
+  }
   else if (d.results[0]) title = `1위 ${d.results[0].name}`;
   $('#result-title').textContent = title;
   for (const r of d.results) {
@@ -546,7 +561,7 @@ function showResults(d) {
     pc.append(portrait(r.charId));
     const nm = el('td', '', r.name);
     nm.style.color = PLAYER_COLORS[r.color];
-    tr.append(el('td', 'rank', `${r.rank}`), pc, nm, el('td', '', `${r.dist.toFixed(1)}m`), el('td', '', r.kills), el('td', '', r.nices), el('td', '', r.gems));
+    tr.append(el('td', 'rank', `${r.rank}`), pc, nm, el('td', '', `${r.score}`), el('td', '', `${r.dist.toFixed(1)}m`), el('td', '', r.kills), el('td', '', r.nices), el('td', '', r.gems));
     body.append(tr);
   }
   $('#result').classList.remove('hidden');
@@ -578,7 +593,9 @@ socket.on('room:kicked', () => {
   toast('방장이 방에서 내보냈음');
 });
 
+// 내가 들어 있지 않은 방 소식은 무시한다. 방을 나간 직후 늦게 온 소식이 방 화면으로 되돌리지 않게
 socket.on('room:state', (room) => {
+  if (!room.players.some((p) => p.id === S.myId)) return;
   const fresh = !S.room || S.room.id !== room.id;
   S.room = room;
   if (fresh) {
@@ -612,7 +629,6 @@ socket.on('disconnect', () => {
   toast('연결이 끊겨서 다시 연결하는 중');
 });
 socket.on('connect', () => {
-  syncClock();
   if (S.myId) {
     // 다시 연결되면 방 정보는 사라지므로 로비로 돌아간다
     request('hello', { name: S.name }).then((res) => {
@@ -633,7 +649,7 @@ window.addEventListener('keydown', (e) => {
     toast(m ? '소리 끔' : '소리 켬');
   }
   if (S.screen !== 'game') return;
-  if (e.key === 'Enter') {
+  if (e.key === 'Enter' && !e.isComposing) {
     if (!gameChat.typing) {
       e.preventDefault();
       gameChat.open();
@@ -671,7 +687,8 @@ $('#btn-ghost-watch').onclick = (e) => {
   checkUiArt();
   await Promise.all([
     loadCommonArt(),
-    music.init(),
+    // 지난번에 소리를 꺼 두었으면 배경음도 꺼진 채로 시작한다
+    music.init().then(() => music.setMuted(isMuted())),
     document.fonts.load('11px Galmuri11'),
     document.fonts.load('11px Galmuri11B'),
     document.fonts.load('14px Galmuri14'),

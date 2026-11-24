@@ -18,10 +18,12 @@ tar czf - package.json package-lock.json Dockerfile .dockerignore server shared 
 
 echo "VM에서 이미지 빌드하고 컨테이너 교체"
 # 지난번 인또 이미지만 지운다. 다른 프로젝트 이미지는 건드리지 않는다
-"${SSH[@]}" "cd ~/$REMOTE_DIR && OLD=\$(docker images -q intto:latest) && docker build -q -t intto:latest . \
+# --pull로 바탕 node 이미지를 늘 새로 받는다. --init은 종료 신호를 node에 넘기고 남은 자식 프로세스를 거둔다
+# 상태 확인은 서버가 뜰 때까지 1초 간격으로 10번 다시 묻고, 끝내 응답이 없거나 오류면 배포를 실패로 끝낸다
+"${SSH[@]}" "cd ~/$REMOTE_DIR && OLD=\$(docker images -q intto:latest) && docker build --pull -q -t intto:latest . \
   && (docker rm -f intto >/dev/null 2>&1 || true) \
-  && docker run -d --name intto -p $PORT:3000 --restart unless-stopped intto:latest >/dev/null \
-  && sleep 2 && curl -s localhost:$PORT/healthz && echo \
+  && docker run -d --init --name intto -p $PORT:3000 --restart unless-stopped intto:latest >/dev/null \
+  && curl -fsS --retry 10 --retry-connrefused --retry-delay 1 localhost:$PORT/healthz && echo \
   && NEW=\$(docker images -q intto:latest) \
   && if [ -n \"\$OLD\" ] && [ \"\$OLD\" != \"\$NEW\" ]; then docker rmi \"\$OLD\" >/dev/null 2>&1 || true; fi"
 

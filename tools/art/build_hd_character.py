@@ -10,9 +10,12 @@
            크기는 첫 그림의 나는 자세 폭에 맞추고, 아래쪽 몸이 겹치도록 위치만 맞춘다. 맞은 모습과 유령은 첫 그림 그대로
 카메라가 1.5배 당겨 보므로 res 1440으로 넣어 화면에서 1:1로 그려지게 한다.
 출력 public/assets/characters/<id>/sheet.png, sprite.json. 대기실 초상은 make_portraits.py
-사용
-  python tools/art/build_hd_character.py art_inbox/mongsil_v2.webp --id mongsil --mode wings \
-      --back-box 0.49,0.37
+같은 폴더에 make_fx.py가 만든 trail.json이 있으면 sprite.json에 이어 적는다. 그래서 몽실은 make_fx.py를 먼저 돌린다.
+사용. 지금 네 캐릭터는 모두 따로 받은 나는 모습 그림으로 만든다
+  python tools/art/build_hd_character.py art_inbox/mongsil_v2.webp --id mongsil --mode bob --src-scale 0.214876 --fly-frames art_inbox/mongsil_fly_v1.png
+  python tools/art/build_hd_character.py art_inbox/kkangdong_v1.webp --id kkangdong --mode bob --src-scale 0.214876 --fly-frames art_inbox/kkangdong_fly_v1.png
+  python tools/art/build_hd_character.py art_inbox/doto_v1.webp --id doto --mode bob --src-scale 0.214876 --fly-frames art_inbox/doto_fly_v1.png
+  python tools/art/build_hd_character.py art_inbox/palang_v1.webp --id palang --mode bob --strip-left --src-scale 0.214876 --fly-frames art_inbox/palang_fly_v1.png
 """
 import argparse
 import json
@@ -24,7 +27,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_doll as pd  # noqa: E402
-from import_scene import unkey, pieces  # noqa: E402
+from artlib import unkey, shrink, to_img, lum, dilate  # noqa: E402
+from import_scene import pieces  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -32,14 +36,6 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[2]
 RES = 1440
 # 날개는 ChatGPT 그림 원래 크기에서 돌린 뒤 줄인다. 외곽선이 또렷해야 날개 조각이 깔끔하게 떨어진다
-
-
-def to_img(a):
-    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-
-
-def resize(img, k):
-    return img.convert("RGBa").resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def binarize(a):
@@ -52,7 +48,7 @@ def binarize(a):
 def strip_left(a):
     """줄마다 맨 왼쪽 어두운 외곽선보다 왼쪽에 있는 픽셀을 지운다. 몸 뒤에 떠 있는 속도선과 연기가 빠진다"""
     a = a.copy()
-    dark = (a[..., 3] > 128) & (pd.lum(a) < 90)
+    dark = (a[..., 3] > 128) & (lum(a) < 90)
     for y in range(a.shape[0]):
         xs = np.nonzero(dark[y])[0]
         if len(xs):
@@ -96,43 +92,18 @@ def wing_masks(f, back_box):
         c = f[..., :3].astype(int)
         orange = (c[..., 0] - c[..., 2]) > 40  # 뿔처럼 주황빛은 날개가 아니다
         back = inner & ~orange & (xx < x0 + W * bx) & (yy < y0 + H * by)
-    grow = lambda m: (pd.dilate(m) & outline) | m
+    grow = lambda m: (dilate(m) & outline) | m
     return grow(front), grow(back)
-
-
-def rotate_piece(f, mask, root, angle, outline_color, ring_px):
-    """날개 속살을 뿌리 기준으로 돌리고, 원본 외곽선 두께만큼 새 외곽선을 두른다"""
-    a = f[..., 3] > 0
-    inner = mask & a & (pd.lum(f.astype(float)) >= 90)
-    src = np.zeros_like(f)
-    src[inner] = f[inner]
-    rot = np.array(Image.fromarray(src).rotate(angle, resample=Image.Resampling.NEAREST, center=(root[0] + 0.5, root[1] + 0.5)))
-    rin = rot[..., 3] > 0
-    # 돌리며 생긴 바늘구멍 메우기
-    n = sum(np.roll(np.roll(rin, dy, 0), dx, 1).astype(int) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx)
-    holes = ~rin & (n >= 5)
-    for y, x in zip(*np.nonzero(holes)):
-        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
-            if rin[y + dy, x + dx]:
-                rot[y, x] = rot[y + dy, x + dx]
-                break
-    rin = rot[..., 3] > 0
-    grown = rin.copy()
-    for _ in range(ring_px):
-        grown = pd.dilate(grown)
-    out = rot.copy()
-    out[grown & ~rin] = outline_color
-    return out
 
 
 def clean_orphans(f, reach=2):
     """주변에 속살이 하나도 없는 어두운 외곽선 픽셀을 지운다. 날개가 떠난 자리에 남는 선"""
     a = f[..., 3] > 0
-    dark = a & (pd.lum(f.astype(float)) < 90)
+    dark = a & (lum(f.astype(float)) < 90)
     inner = a & ~dark
     near = inner.copy()
     for _ in range(reach):
-        near = pd.dilate(near)
+        near = dilate(near)
     out = f.copy()
     out[dark & ~near] = 0
     return out
@@ -144,7 +115,7 @@ def layer_dist(src, valid, maxd):
     cur = src.copy()
     d[cur] = 0
     for i in range(1, maxd + 1):
-        nxt = pd.dilate(cur) & valid & (d == 10**6)
+        nxt = dilate(cur) & valid & (d == 10**6)
         if not nxt.any():
             break
         d[nxt] = i
@@ -155,7 +126,7 @@ def layer_dist(src, valid, maxd):
 def split_outline(f, front, back, ring_px):
     """외곽선 픽셀을 가장 가까운 덩어리 몫으로 나눈다. 앞날개와 붙은 외곽선은 앞날개가 가져간다"""
     a = f[..., 3] > 0
-    dark = a & (pd.lum(f.astype(float)) < 90)
+    dark = a & (lum(f.astype(float)) < 90)
     fi = front & a & ~dark
     bi = back & a & ~dark
     body_i = a & ~dark & ~fi & ~bi
@@ -308,7 +279,7 @@ def main():
                                front_margin=round(work_k * 2), reach=round(work_k * 3), ring_px=round(work_k * 1.4))
     else:
         fly_work = [pd.shift_y(work, -b) for b in wbob]
-    fly = [np.array(resize(to_img(f), k)) for f in fly_work]
+    fly = [np.array(shrink(to_img(f), k)) for f in fly_work]
     if args.fly_frames:
         seq = pieces(unkey(np.array(Image.open(args.fly_frames).convert("RGB"))), min_gap=20)
         seq = [s for s in seq if (s[..., 3] > 128).sum() > 500]  # 가장자리 티끌은 빼고
@@ -316,11 +287,11 @@ def main():
             sys.exit(f"나는 프레임 4개를 찾지 못함: {len(seq)}개")
         seq = [to_img(s) for s in seq[:4]]
         kf = k * poses[0].width / float(np.median([s.width for s in seq]))
-        fly = [np.array(resize(to_img(binarize(np.array(s))), kf)) for s in seq]
+        fly = [np.array(shrink(to_img(binarize(np.array(s))), kf)) for s in seq]
         print(f"나는 프레임 그림 배율 {kf / k:.3f}")
 
-    hurt = np.array(resize(poses[1], k))
-    ghost = np.array(resize(poses[2], k))
+    hurt = np.array(shrink(poses[1], k))
+    ghost = np.array(shrink(poses[2], k))
     # 몸통 중심은 날개를 펴지 않은 2번째 프레임 기준
     ref = fly[1]
     cx, cy = body_center(ref)
@@ -350,12 +321,6 @@ def main():
     }
     out = ROOT / "public" / "assets" / "characters" / args.id
     out.mkdir(parents=True, exist_ok=True)
-    backup = ROOT / "art_inbox" / "out" / "placeholder_backup" / "characters" / args.id
-    if not backup.exists():
-        backup.mkdir(parents=True)
-        for n in ("sheet.png", "sprite.json", "portrait.png"):
-            if (out / n).exists():
-                (backup / n).write_bytes((out / n).read_bytes())
     sheet = np.concatenate(frames, axis=1)
     Image.fromarray(sheet).save(out / "sheet.png")
     spec = {"image": "sheet.png", "res": RES, "frameWidth": fw, "frameHeight": fh, "hitRadius": args.hit_radius, "animations": anims}

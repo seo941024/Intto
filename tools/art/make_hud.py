@@ -1,8 +1,10 @@
-"""ChatGPT로 받은 HUD 부품 그림 두 장으로 레이스 화면 HUD 아틀라스를 만든다.
+"""ChatGPT로 받은 HUD 그림 네 장으로 레이스 화면 HUD 아틀라스를 만든다.
 
-  art_inbox/hud_parts_v1.png   하트 둘, 빈 체력바, 체력 채움, 타이머 판, 순위 판 넷, 기술칸 둘, 진행 막대
-  art_inbox/hud_digits_v1.png  숫자 0~9, 쌍점, m
-출력 public/assets/ui/hud.png, hud.json. 기술 아이콘은 pack_concept.py의 icon_images를 그대로 싣는다.
+  art_inbox/hud_parts_v1.png       하트 둘, 빈 체력바, 체력 채움, 타이머 판, 순위 판 넷, 기술칸 둘, 진행 막대
+  art_inbox/hud_digits_v1.png      숫자 0~9, 쌍점, m
+  art_inbox/hud_faces_flag_v1.png  윗줄 진행 막대 얼굴 넷, 아랫줄 골 깃발 4프레임. 없으면 얼굴과 깃발 없이 만든다
+  art_inbox/icons_v1.webp          기술 아이콘 14개. pack_concept.py의 icon_images로 잘라 그대로 싣는다
+출력 public/assets/ui/hud.png, hud.json
 
 부품은 모두 같은 배율 PART_K로 줄여 외곽선 굵기를 맞춘다. 비율은 바꾸지 않는다.
 체력 채움은 빈 체력바 안쪽 어두운 자리에 맞춰 넣고, 게임은 체력만큼 왼쪽부터 잘라 그린다.
@@ -10,7 +12,6 @@
 사용
   python tools/art/make_hud.py
 """
-import json
 import sys
 from pathlib import Path
 
@@ -19,8 +20,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_doll as pd  # noqa: E402
-from import_scene import unkey  # noqa: E402
-from pack_concept import Packer, write_atlas, icon_images, scaled  # noqa: E402
+from artlib import unkey, shrink, to_img, crop_box, lum, dilate  # noqa: E402
+from pack_concept import Packer, write_atlas, icon_images  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -64,14 +65,6 @@ def boxes(keyed, count):
     return [b for r in rows for b in sorted(r, key=lambda b: b[0])]
 
 
-def crop(keyed, b, pad=4):
-    x0, y0, x1, y1 = b
-    h, w = keyed.shape[:2]
-    a = keyed[max(0, y0 - pad):min(h, y1 + pad), max(0, x0 - pad):min(w, x1 + pad)]
-    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-    return img.crop(img.getbbox())
-
-
 def outside(passable):
     """테두리에서 passable 픽셀만 밟고 닿는 자리"""
     out = np.zeros_like(passable)
@@ -80,7 +73,7 @@ def outside(passable):
     out[:, 0] = passable[:, 0]
     out[:, -1] = passable[:, -1]
     while True:
-        nxt = pd.dilate(out) & passable
+        nxt = dilate(out) & passable
         if (nxt == out).all():
             return out
         out = nxt
@@ -90,14 +83,14 @@ def hp_parts(frame, fill):
     """빈 체력바 안쪽 어두운 자리와, 채움 그림의 외곽선 안쪽"""
     fa = np.array(frame).astype(float)
     op = fa[..., 3] > 128
-    dark = pd.lum(fa) < 80
+    dark = lum(fa) < 80
     inner = op & dark & ~outside(~op | dark)
     ya, xa = np.nonzero(inner)
     ibox = (xa.min(), ya.min(), xa.max() + 1, ya.max() + 1)
 
     la = np.array(fill).astype(float)
     lop = la[..., 3] > 128
-    ldark = pd.lum(la) < 80
+    ldark = lum(la) < 80
     linner = lop & ~outside(~lop | ldark)
     yb, xb = np.nonzero(linner)
     fbox = (xb.min(), yb.min(), xb.max() + 1, yb.max() + 1)
@@ -111,8 +104,8 @@ def hp_parts(frame, fill):
 def tint(img, dark, light):
     """밝기를 지키며 두 색 사이로 다시 칠한다"""
     a = np.array(img).astype(float)
-    lum = (0.3 * a[..., 0] + 0.59 * a[..., 1] + 0.11 * a[..., 2])[..., None] / 255
-    a[..., :3] = np.array(dark) + (np.array(light) - np.array(dark)) * lum
+    v = lum(a)[..., None] / 255
+    a[..., :3] = np.array(dark) + (np.array(light) - np.array(dark)) * v
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
@@ -125,13 +118,13 @@ def fit_fill(frame, fill):
     m = np.array(mask.resize((fw, fh), Image.Resampling.LANCZOS)).astype(float) / 255
     fa = np.array(out).astype(float)
     fa[..., 3] *= m
-    return [fx, fy, fw, fh], Image.fromarray(np.clip(fa, 0, 255).astype(np.uint8), "RGBA")
+    return [fx, fy, fw, fh], to_img(fa)
 
 
 def red(img):
     a = np.array(img).astype(float)
-    lum = (0.3 * a[..., 0] + 0.59 * a[..., 1] + 0.11 * a[..., 2])[..., None] / 255
-    a[..., :3] = np.array([150, 30, 50]) + (np.array([255, 140, 140]) - np.array([150, 30, 50])) * lum
+    v = lum(a)[..., None] / 255
+    a[..., :3] = np.array([150, 30, 50]) + (np.array([255, 140, 140]) - np.array([150, 30, 50])) * v
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
@@ -143,7 +136,7 @@ def faces_and_flags():
     rows = np.nonzero((fk[..., 3] > 128).any(1))[0]
     gaps = [y for y in range(rows.min(), rows.max()) if not (fk[y, :, 3] > 128).any()]
     mid = gaps[len(gaps) // 2]
-    real = lambda ps: [Image.fromarray(np.clip(q, 0, 255).astype(np.uint8), "RGBA") for q in ps if (q[..., 3] > 128).sum() > 500]
+    real = lambda ps: [to_img(q) for q in ps if (q[..., 3] > 128).sum() > 500]
     faces = real(pieces(fk[:mid], min_gap=20))
     flags = real(pieces(fk[mid:], min_gap=20))
     return dict(zip(FACE_ORDER, faces)), flags
@@ -152,8 +145,8 @@ def faces_and_flags():
 def main():
     parts_k = unkey(np.array(Image.open(INBOX / "hud_parts_v1.png").convert("RGB")))
     digits_k = unkey(np.array(Image.open(INBOX / "hud_digits_v1.png").convert("RGB")))
-    parts = {n: crop(parts_k, b) for n, b in zip(PART_NAMES, boxes(parts_k, len(PART_NAMES)))}
-    digits = {n: crop(digits_k, b) for n, b in zip(DIGIT_NAMES, boxes(digits_k, len(DIGIT_NAMES)))}
+    parts = {n: crop_box(parts_k, b, 4) for n, b in zip(PART_NAMES, boxes(parts_k, len(PART_NAMES)))}
+    digits = {n: crop_box(digits_k, b, 4) for n, b in zip(DIGIT_NAMES, boxes(digits_k, len(DIGIT_NAMES)))}
 
     p = Packer(1024)
     anims = {}
@@ -164,7 +157,7 @@ def main():
 
     for n in PART_NAMES:
         if n != "hpFillSrc":
-            put(n, scaled(parts[n], PART_K))
+            put(n, shrink(parts[n], PART_K))
 
     # 체력 채움: 빈 체력바 안쪽 자리 크기로 맞추고 그 모양 밖은 지운다
     hp_rect, fill = fit_fill(parts["hpFrame"], parts["hpFillSrc"])
@@ -177,7 +170,7 @@ def main():
     if FACES_SRC.exists():
         faces, flags = faces_and_flags()
         for cid, f in faces.items():
-            img = scaled(f, FACE_H / f.height)
+            img = shrink(f, FACE_H / f.height)
             anims[f"face_{cid}"] = {"frames": [p.add(img)], "anchor": [img.width // 2, img.height // 2]}
         fh = max(f.height for f in flags)
         fwid = max(f.width for f in flags)
@@ -185,7 +178,7 @@ def main():
         for f in flags[:4]:
             c = Image.new("RGBA", (fwid, fh), (0, 0, 0, 0))
             c.alpha_composite(f, (0, fh - f.height))
-            rects.append(p.add(scaled(c, FLAG_H / fh)))
+            rects.append(p.add(shrink(c, FLAG_H / fh)))
         anims["goalFlag"] = {"frames": rects, "fps": 8, "anchor": [round(rects[0][2] * 0.1), rects[0][3]]}
         print(f"  얼굴 {len(faces)}개, 깃발 {len(flags)}프레임")
 
@@ -194,7 +187,7 @@ def main():
     for size, h in DIGIT_H.items():
         k = h / ref_h
         for n, img in digits.items():
-            put(f"digit{size}_{n}", scaled(img, k))
+            put(f"digit{size}_{n}", shrink(img, k))
 
     icons = icon_images()
     for name, img in icons.items():
@@ -204,9 +197,9 @@ def main():
     tp = parts["timerPlate"]
     rk = parts["rankRow1"]
     # 타이머 숫자 칸: 판 오른쪽의 밝은 안쪽 줄들의 가운데
-    tp_s = np.array(scaled(tp, PART_K)).astype(float)
-    lum = 0.3 * tp_s[..., 0] + 0.59 * tp_s[..., 1] + 0.11 * tp_s[..., 2]
-    rows = np.nonzero(((tp_s[..., 3] > 128) & (lum > 190))[:, round(tp_s.shape[1] * 0.45):].any(1))[0]
+    tp_s = np.array(shrink(tp, PART_K)).astype(float)
+    light = lum(tp_s)
+    rows = np.nonzero(((tp_s[..., 3] > 128) & (light > 190))[:, round(tp_s.shape[1] * 0.45):].any(1))[0]
     extra = {
         "hpFillRect": hp_rect,
         "miniFillRect": mini_rect,
@@ -214,11 +207,6 @@ def main():
         "timerTextX": round(0.665, 3),
         "rankBadge": [round(rk.height * 0.5 * PART_K), round(rk.height * 0.5 * PART_K)],
     }
-    backup = ROOT / "art_inbox" / "out" / "placeholder_backup" / "ui"
-    backup.mkdir(parents=True, exist_ok=True)
-    for n in ("hud.png", "hud.json"):
-        if not (backup / n).exists() and (UI / n).exists():
-            (backup / n).write_bytes((UI / n).read_bytes())
     write_atlas(UI, "hud", p, anims, extra)
     for n in ["heartFull", "hpFrame", "timerPlate", "rankRow1", "slotFrame", "slotActive", "miniBar", "hpFill", "digitS_0", "digitM_0", "digitL_0"]:
         print(f"  {n}: {anims[n]['frames'][0][2]}×{anims[n]['frames'][0][3]}")

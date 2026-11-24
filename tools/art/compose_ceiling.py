@@ -16,6 +16,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artlib import MAGENTA  # noqa: E402
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -28,7 +31,6 @@ STRIP_ROWS = (568, 665)  # 받은 띠에서 쓰는 줄: 위쪽 남색 줄 바로
 KEEP = 75  # 원본 맨 위에서 그대로 두는 꽉 찬 구름 줄 수
 JOIN = 62  # 띠를 붙이기 시작하는 줄. KEEP까지는 원본과 섞는다
 CLEAR = 170  # 원본 천장 띠를 지우는 줄 수. 원본 천장 아래 끝보다 깊고 바닥보다 얕다
-MAGENTA = np.array([255, 0, 255], dtype=float)
 
 
 def main():

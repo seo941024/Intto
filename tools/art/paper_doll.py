@@ -3,6 +3,8 @@
 AI는 프레임마다 몸을 조금씩 다르게 그려서 애니메이션이 커졌다 작아졌다 한다.
 이 도구는 외곽선으로 둘러싸인 조각을 찾아, 움직이는 부분 조건에 맞는 조각만 각 프레임에서 오려
 기준 프레임의 몸 위에 붙인다.
+지금은 pieces_of, components, leg_inner, dangle, shift_y를 다른 그림 도구가 가져다 쓰는 도우미로 쓴다.
+아래 예의 art_inbox/out 그림은 git에 올리지 않는 예전 중간 결과다.
 
 사용
   python tools/art/paper_doll.py art_inbox/out/mongsil_flap_v1.png --out art_inbox/out/mongsil_flap_doll.png \
@@ -14,16 +16,16 @@ AI는 프레임마다 몸을 조금씩 다르게 그려서 애니메이션이 �
 import argparse
 import sys
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artlib import lum, dilate  # noqa: E402
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
-
-
-def lum(px):
-    return 0.3 * px[..., 0] + 0.59 * px[..., 1] + 0.11 * px[..., 2]
 
 
 def components(f):
@@ -126,14 +128,6 @@ def pieces_of(mask):
                             q.append((ny, nx))
             out.append(m)
     return out
-
-
-def dilate(m):
-    g = m.copy()
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            g |= np.roll(np.roll(m, dy, 0), dx, 1)
-    return g
 
 
 def rotate_piece(f, mask, root, angle, outline_color):

@@ -1,11 +1,12 @@
 // 레이스 화면: 내 비행 계산, 서버 신호 반영, 그리기
-import { RULES, deriveStats, PLAYER_COLORS } from '/shared/rules.js';
-import {
-  buildMap, terrainAt, circleHitsTerrain, circleHitsObstacle, obstacleY, boltState, MAP_BY_ID,
-} from '/shared/mapgen.js';
+import { RULES, PLAYER_COLORS } from '/shared/rules.js';
+import { buildMap, terrainAt, obstacleY, boltState, MAP_BY_ID } from '/shared/mapgen.js';
 import { CHARACTER_BY_ID, SKILLS } from '/shared/characters.js';
 import { mulberry32 } from '/shared/rng.js';
-import { steerFlyer, moveFlyer } from '/shared/flight.js';
+import { clamp, lowerBound } from '/shared/util.js';
+import {
+  EFFECTS, GEM_RETRY_MS, newBody, makeHooks, stepBody, damageBody, debuffBody, applySelf, animOf, effFlags, bodyDist, bodyState,
+} from '/shared/body.js';
 import { ART, loadWorld } from './assets.js';
 import { socket, serverNow } from './net.js';
 import { sfx } from './sfx.js';
@@ -14,14 +15,14 @@ const W = RULES.view.w;
 const H = RULES.view.h;
 // 맵을 당겨 보는 배율과, 그때 화면에 보이는 맵 크기
 const Z = RULES.cameraZoom || 1;
+// 생명을 잃은 까닭별 알림. 여기 없는 까닭은 기술에 맞은 것이다
+const CRASH_TEXT = { terrain: '부딪힘', obstacle: '장애물에 부딪힘', hp: 'HP가 바닥남' };
 const VW = W / Z;
 const VH = H / Z;
 const WH = RULES.worldH; // 맵 세로 크기
 // 배경에 덮는 안개: 색, 먼 배경 위 진하기, 가까운 섬 위 진하기. 폭풍협곡은 밝게 빛나는 번개·수정이 잘 보이게 어두운 남색
 const HAZE = { default: ['214, 236, 255', 0.36, 0.4], storm: ['16, 14, 46', 0.56, 0.5] };
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // 글씨는 모두 갈무리 굵은 글꼴. 맵 위 글씨는 1.5배로 당겨 보이므로 13px, 화면 위 HUD 글씨는 18px
-const FONT = '18px Galmuri11B';
 const FONT_BIG = '24px Galmuri11B';
 const FONT_SMALL = '13px Galmuri11B';
 const FONT_HUD = '18px Galmuri11B';
@@ -30,6 +31,14 @@ const OUTLINE = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1
 const DIGIT_OVERLAP = { S: 1, M: 2, L: 2 }; // 이웃 숫자의 외곽선을 이만큼 겹쳐 붙인다
 const BUBBLE_W = 130; // 말풍선 글줄 최대 폭, 월드 픽셀
 const BUBBLE_LINES = 3;
+const TEXT_CACHE_MAX = 300; // 미리 그려 둔 HUD 글씨를 이만큼까지 남긴다
+
+// 조건을 만족하는 것만 남기고 배열 자리를 그대로 다시 쓴다
+function prune(arr, keep) {
+  let n = 0;
+  for (const x of arr) if (keep(x)) arr[n++] = x;
+  arr.length = n;
+}
 
 // 글자 단위로 줄을 나눈다. 줄 수를 넘기면 마지막 줄 끝을 …로 줄인다
 function wrapText(ctx, text, maxW, maxLines) {
@@ -51,23 +60,16 @@ function wrapText(ctx, text, maxW, maxLines) {
   return lines;
 }
 
-function lowerBound(arr, x) {
-  let lo = 0;
-  let hi = arr.length;
-  while (lo < hi) {
-    const m = (lo + hi) >> 1;
-    if (arr[m].x < x) lo = m + 1;
-    else hi = m;
-  }
-  return lo;
-}
-
 export class Game {
   constructor(canvas, init, myId, hooks) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.S = 1;
     this.fitCanvas();
+    this.needFit = false;
+    this.frameNo = 0;
+    this.textCache = new Map(); // 글씨·글꼴·색·배율 → 테두리까지 그려 둔 그림
+    this.textCtx = document.createElement('canvas').getContext('2d'); // 글씨 폭을 잴 때 쓴다
     this.init = init;
     this.myId = myId;
     this.hooks = hooks;
@@ -78,43 +80,55 @@ export class Game {
     for (const p of init.players) this.players.set(p.id, { ...p, snaps: [], cur: null, slot: 0 });
     this.me = this.players.get(myId);
     this.ch = CHARACTER_BY_ID[this.me.charId];
-    const st = deriveStats(this.ch.stats, 0);
-    // 출발 통로 가운데 둘레에 네 명을 나란히. 통로는 위 30, 아래 46을 뺀 자리
-    const startY = (30 + WH - 46) / 2 - 30 + this.me.color * 20;
-    this.L = {
-      x: 0, y: startY, vx: st.baseSpeed, vy: 0,
-      hp: st.maxHp, maxHp: st.maxHp, lives: RULES.lives,
-      ghost: false, dead: false, ghostDist: 0, feathers: 0,
-      invUntil: 0, dashUntil: 0, obsCd: 0, hurtUntil: 0, shield: false,
-      eff: { blind: 0, heavy: 0, shake: 0, slow: 0, glide: 0, small: 0 },
-      shakeNext: 0, lastHit: null, niceIdx: 0, wasDashing: false, startY,
-    };
+    // 내 몸. 비행·충돌·먹기 규칙은 서버 봇과 같은 shared/body.js로 계산한다
+    this.L = newBody(this.map, this.ch, this.me.color);
+    this.bodyHooks = makeHooks({
+      emit: (ev, d) => socket.emit(ev, d),
+      fx: (name, x, y, ms) => this.addFx(name, x, y, ms),
+      sound: (name) => sfx[name](),
+      shake: (ms) => (this.shakeUntil = Math.max(this.shakeUntil, performance.now() + ms)),
+      squash: (o, until) => this.squash.set(o.id, until),
+      nice: (x, y) => {
+        this.popups.push({ img: 'nice', x, y: y - 45, t0: performance.now(), dur: 900 });
+        sfx.nice();
+      },
+      // 목숨 둘을 다 잃으면 탈락. 거리 기록은 여기서 끝나고, 유령으로 같이 날지 관전할지 고른다
+      out: () => {
+        const L = this.L;
+        L.ghost = true;
+        sfx.ghost();
+        // 기록이 끝나는 자리를 서버가 알도록 탈락을 알리기 전에 지금 상태를 한 번 더 보낸다
+        socket.emit('race:state', bodyState(L, this.input, performance.now()));
+        socket.emit('race:final');
+        // 혼자 남은 사람이 탈락하면 서버가 곧바로 레이스를 끝낸다. 그때는 고르는 창을 띄우지 않는다
+        this.later(() => {
+          if (!this.ended && L.ghost && !L.dead) this.hooks.onGhost && this.hooks.onGhost();
+        }, 400);
+      },
+    });
     this.slot = 0;
+    this.gemScore = 0; // 내가 먹은 보석 점수. 순위 점수 = 거리 + 보석 점수
     this.input = { up: false, boost: false };
-    this.gemTaken = new Set();
-    this.grabbed = new Set(); // 내가 먹은 기술 아이콘
-    this.gemPending = new Map(); // id → 보낸 시각
-    this.foodEaten = new Set();
-    this.featherTaken = new Set();
     this.projectiles = new Map();
     this.puddles = new Map();
-    this.fx = []; // { name, x, y, t0, dur, atlas, follow }
+    this.fx = []; // { name, x, y, t0, dur, follow }
     this.popups = [];
     this.feed = [];
     this.squash = new Map();
+    this.shakeUntil = 0;
     this.boltWarn = new Map();
     this.bubbles = new Map(); // id → { text, lines, t0, ms } 채팅 말풍선
-    this.shakeUntil = 0;
     this.ended = false;
     this.alive = true;
     this.lastSend = 0;
     this.lastCount = 99;
     this.lastTs = performance.now();
-    this.camX = -RULES.cameraLead;
+    this.camX = -RULES.cameraLead / Z;
     this.particles = [];
     this.crumbs = []; // 날갯짓 부스러기 { charId, x, y, vx, vy, s, t0, life }
     this.flapIdx = new Map(); // 플레이어 id → 지난번 날갯짓 프레임
     this.handlers = [];
+    this.timers = []; // 게임을 닫을 때 같이 지울 setTimeout
     this.bindSocket();
     this.bindInput();
     loadWorld(this.theme).then((w) => {
@@ -126,6 +140,7 @@ export class Game {
 
   destroy() {
     this.alive = false;
+    for (const id of this.timers) clearTimeout(id);
     for (const [ev, fn] of this.handlers) socket.off(ev, fn);
     for (const [el, ev, fn, o] of this.domHandlers) el.removeEventListener(ev, fn, o);
   }
@@ -155,10 +170,10 @@ export class Game {
     const ek = t.k;
     this.edgeK = ek;
     // 속 무늬와 띠 타일은 땅을 따라 기울인 조각으로 잘라 붙인다
-    this.ceilBody = t.toCanvas('ceilBody', true);
-    this.floorBody = t.toCanvas('floorBody', true);
-    this.ceilEdge = t.toCanvas('ceilEdge', true);
-    this.floorEdge = t.toCanvas('floorEdge', true);
+    this.ceilBody = t.toCanvas('ceilBody');
+    this.floorBody = t.toCanvas('floorBody');
+    this.ceilEdge = t.toCanvas('ceilEdge');
+    this.floorEdge = t.toCanvas('floorEdge');
     this.ceilEdgeAy = (t.frame('ceilEdge')?.ay || 0) * ek;
     this.floorEdgeAy = (t.frame('floorEdge')?.ay || 0) * ek;
     this.decor = t.def.decor || { floor: [], ceil: [] };
@@ -186,10 +201,38 @@ export class Game {
         this.decorImg.set(d.name, { c, f });
       }
     }
+    this.bakeBackground();
     const rng = mulberry32(this.init.seed);
     for (let i = 0; i < 60; i++) {
       this.particles.push({ x: rng.range(0, W), y: rng.range(0, H), p: rng.range(0, 10), s: rng.range(0.6, 1.4) });
     }
+  }
+
+  // 배경 층마다 그 위에 덮이는 안개를 미리 입혀 둔다. 하늘은 먼 안개와 가까운 안개 둘 다, 먼 섬은 둘 다, 가까운 섬은 가까운 안개만.
+  // 균일한 색 덮기는 층마다 따로 입혀도 겹친 뒤 화면 전체에 덮은 것과 같아서, 매 프레임 화면 전체를 두 번 덮지 않아도 된다
+  bakeBackground() {
+    const w = this.world;
+    const [hc, hFar, hMid] = HAZE[this.theme] || HAZE.default;
+    const bake = (img, hazes, opaque) => {
+      if (!img) return null;
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      // 하늘은 빈틈없이 칠해진 그림이고, 섬 층은 그림이 있는 자리에만 안개를 입힌다
+      g.globalCompositeOperation = opaque ? 'source-over' : 'source-atop';
+      for (const a of hazes) {
+        g.fillStyle = `rgba(${hc}, ${a})`;
+        g.fillRect(0, 0, c.width, c.height);
+      }
+      return c;
+    };
+    this.bg = { sky: bake(w.sky, [hFar, hMid], true), far: bake(w.far, [hFar, hMid], false), mid: bake(w.mid, [hMid], false) };
+  }
+
+  later(fn, ms) {
+    this.timers.push(setTimeout(fn, ms));
   }
 
   on(ev, fn) {
@@ -213,13 +256,12 @@ export class Game {
       }
     });
     this.on('race:gem', (d) => {
-      this.gemTaken.add(d.id);
-      this.gemPending.delete(d.id);
-      const p = this.players.get(d.by);
-      if (p) p.slot = d.slot;
+      this.L.gemTaken.add(d.id);
+      this.L.gemAsked.delete(d.id);
       if (d.by === this.myId) {
-        this.slot = d.slot;
-        this.map.gems[d.id]?.red ? sfx.gemRed() : sfx.gem();
+        const red = this.map.gems[d.id]?.red;
+        this.gemScore += red ? RULES.redGemScore : RULES.gemScore;
+        red ? sfx.gemRed() : sfx.gem();
       }
     });
     this.on('race:grab', (d) => {
@@ -235,7 +277,7 @@ export class Game {
       if (pos) this.popups.push({ text: SKILLS[d.skill].name, x: pos.x, y: pos.y - 40, t0: performance.now(), dur: 900, color: PLAYER_COLORS[p.color] });
       if (d.by === this.myId) sfx.skill();
     });
-    this.on('race:self', (d) => this.applySelf(d.skill));
+    this.on('race:self', (d) => applySelf(this.L, d.skill, performance.now(), this.bodyHooks));
     this.on('race:proj', (d) => {
       this.projectiles.set(d.id, { ...d, start: performance.now() - Math.max(0, serverNow() - d.t) });
       if (d.by === this.myId) sfx.shoot();
@@ -245,19 +287,9 @@ export class Game {
       if (d.hit) this.addFx('hit', d.x, d.y, 280);
     });
     this.on('race:puddle', (d) => this.puddles.set(d.id, { ...d, until: performance.now() + d.lifeMs, t0: performance.now() }));
-    this.on('race:hit', (d) => this.damage(d.dmg, d.by, d.kind));
-    this.on('race:debuff', (d) => this.debuff(d.effect, d.ms, d.by));
+    this.on('race:hit', (d) => damageBody(this.L, d.dmg, d.by, d.kind, performance.now(), this.bodyHooks));
+    this.on('race:debuff', (d) => debuffBody(this.L, d.effect, d.ms, d.by, performance.now(), this.bodyHooks));
     this.on('race:fx', (d) => this.remoteFx(d));
-    this.on('race:drain', (d) => {
-      const L = this.L;
-      if (L.ghost || L.dead) return;
-      L.hp -= d.amount;
-      L.lastHit = { by: d.by, at: performance.now() };
-      L.hurtUntil = performance.now() + 400;
-      this.addFx('hit', L.x, L.y, 280);
-      sfx.hit();
-      if (L.hp <= 0) this.loseLife('drain');
-    });
     this.on('race:event', (d) => this.onEvent(d));
     this.on('race:end', (d) => {
       if (this.ended) return;
@@ -266,7 +298,7 @@ export class Game {
       this.input.up = false;
       this.input.boost = false;
       sfx.end();
-      setTimeout(() => this.hooks.onEnd && this.hooks.onEnd(d), RULES.resultHoldMs);
+      this.later(() => this.hooks.onEnd && this.hooks.onEnd(d), RULES.resultHoldMs);
     });
   }
 
@@ -291,16 +323,19 @@ export class Game {
       if (e.touches.length >= 2) this.action();
       else this.input.up = true;
     }, { passive: false });
-    add(this.canvas, 'touchend', (e) => {
+    // 알림이 끼어들어 터치가 취소돼도 위로 누르기를 뗀다
+    const release = (e) => {
       if (e.touches.length === 0) this.input.up = false;
-    });
+    };
+    add(this.canvas, 'touchend', release);
+    add(this.canvas, 'touchcancel', release);
     add(window, 'keydown', (e) => {
       if (typing()) return;
       const k = e.code;
       if (k === 'ArrowUp') this.input.up = true;
       else if (k === 'KeyX') this.input.boost = true;
       else if (this.L.dead && ['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(k)) {
-        // 관전 중이면 볼 사람을 바꾼다. 유령은 앞으로 가려다 관전으로 넘어가지 않게 관전하기 버튼으로만 넘어간다
+        // 관전 중일 때만 볼 사람을 바꾼다. 유령으로 나는 중에는 관전하기 버튼으로만 관전으로 넘어간다
         if (!e.repeat) this.cycleSpec(k === 'ArrowLeft' || k === 'KeyA' ? -1 : 1);
       } else if (k === 'KeyZ' && !e.repeat) this.action();
       else return;
@@ -311,6 +346,7 @@ export class Game {
       if (k === 'ArrowUp') this.input.up = false;
       if (k === 'KeyX') this.input.boost = false;
     });
+    add(window, 'resize', () => (this.needFit = true));
     add(window, 'blur', () => {
       this.input.up = false;
       this.input.boost = false;
@@ -319,7 +355,7 @@ export class Game {
 
   // 탈락한 뒤 볼 수 있는 사람. 순위 순서
   specList() {
-    return this.standings().filter((s) => !s.dead && !s.ghost && s.p.id !== this.myId && s.p._view);
+    return this.standings().filter((s) => !s.out && s.p.id !== this.myId && s.p._view);
   }
 
   // 탈락한 뒤 ←→로 볼 사람을 바꾼다
@@ -339,10 +375,10 @@ export class Game {
       return { lives: c.lv, hp: c.hp, maxHp: c.mhp || 1, ghost: c.ghost, dead: c.dead, dist: c.dist || 0, feathers: 0, slot: sp.slot || 0, ch: CHARACTER_BY_ID[sp.charId] || this.ch };
     }
     const L = this.L;
-    return { lives: L.lives, hp: L.hp, maxHp: L.maxHp, ghost: L.ghost, dead: L.dead, dist: Math.max(0, (L.x - L.ghostDist) / RULES.pxPerMeter), feathers: L.feathers, slot: this.slot, ch: this.ch };
+    return { lives: L.lives, hp: L.hp, maxHp: L.maxHp, ghost: L.ghost, dead: L.dead, dist: bodyDist(L), feathers: L.feathers, slot: this.slot, ch: this.ch };
   }
 
-  // 오른쪽 버튼: 든 기술 쓰기
+  // 든 기술 쓰기. 마우스 오른쪽 버튼, Z, 두 손가락 터치
   action() {
     if (this.ended || this.raceT() < 0) return;
     const L = this.L;
@@ -357,6 +393,7 @@ export class Game {
   // ── 루프 ──
   frame(ts) {
     if (!this.alive) return;
+    this.frameNo++;
     const dt = Math.min(0.05, Math.max(0, (ts - this.lastTs) / 1000));
     this.lastTs = ts;
     const t = this.raceT();
@@ -377,237 +414,14 @@ export class Game {
         for (let i = 0; i < n; i++) this.step(dt / n, t);
       }
     }
-    this.sendState(ts);
+    if (!this.ended) this.sendState(ts);
     this.cleanup();
     if (this.world) this.render(t, dt);
     requestAnimationFrame((x) => this.frame(x));
   }
 
   step(dt, t) {
-    const L = this.L;
-    if (L.dead) return;
-    const now = performance.now();
-    const st = deriveStats(this.ch.stats, L.feathers);
-    L.maxHp = st.maxHp;
-    const dashing = now < L.dashUntil;
-    const eff = (k) => now < L.eff[k];
-
-    // 앞으로, 위아래. 서버 봇과 같은 계산
-    steerFlyer(L, st, this.input, { dashing, slow: eff('slow'), heavy: eff('heavy'), glide: eff('glide') }, dt);
-    if (eff('shake') && now > L.shakeNext) {
-      L.vy += (Math.random() * 2 - 1) * 260;
-      L.shakeNext = now + 160;
-    }
-    moveFlyer(L, dt);
-
-    const r = eff('small') ? 6 : 12;
-    if (L.wasDashing && !dashing && circleHitsTerrain(this.map, L.x, L.y, r)) this.recenter();
-    L.wasDashing = dashing;
-
-    // 지형
-    if (!dashing && circleHitsTerrain(this.map, L.x, L.y, r)) {
-      // 유령은 다치지 않고 땅 안쪽으로 밀려나기만 한다
-      if (L.ghost || now < L.invUntil) this.pushInside(r);
-      else if (L.shield) {
-        L.shield = false;
-        L.invUntil = now + 600;
-        this.pushInside(r);
-        this.addFx('hit', L.x, L.y, 280);
-        sfx.shield();
-      } else if (RULES.terrainCostsLife) {
-        this.loseLife('terrain');
-      } else {
-        this.damage(RULES.obstacleDamage, null, 'terrain', true);
-        this.pushInside(r);
-      }
-    }
-    if (L.dead) return;
-
-    // 장애물
-    if (!L.ghost && !dashing) {
-      const obs = this.map.obstacles;
-      for (let i = Math.max(0, lowerBound(obs, L.x - 72)); i < obs.length && obs[i].x < L.x + 72; i++) {
-        const o = obs[i];
-        const res = circleHitsObstacle(this.map, o, t, L.x, L.y, r);
-        if (!res) continue;
-        if (res === 'bounce') {
-          if (L.vy > -200) {
-            L.vy = -330;
-            this.squash.set(o.id, now + 260);
-            sfx.bounce();
-          }
-          continue;
-        }
-        if (now < L.invUntil || now < L.obsCd) continue;
-        if (L.shield) {
-          L.shield = false;
-          L.obsCd = now + RULES.hitInvulnMs;
-          this.addFx('hit', L.x, L.y, 280);
-          sfx.shield();
-        } else if (RULES.obstacleCostsLife) {
-          this.loseLife('obstacle');
-        } else {
-          L.obsCd = now + RULES.hitInvulnMs;
-          this.damage(RULES.obstacleDamage, null, 'obstacle', true);
-        }
-        break;
-      }
-    }
-    if (L.dead) return;
-
-    // 보석·회복·깃털
-    if (!L.ghost) {
-      const reach = (r + 12) ** 2;
-      const gems = this.map.gems;
-      for (let i = lowerBound(gems, L.x - 30); i < gems.length && gems[i].x < L.x + 30; i++) {
-        const g = gems[i];
-        if (this.gemTaken.has(g.id) || this.gemPending.has(g.id)) continue;
-        if ((g.x - L.x) ** 2 + (g.y - L.y) ** 2 < reach) {
-          this.gemPending.set(g.id, now);
-          socket.emit('race:pickup', g.id);
-          this.addFx('pickup', g.x, g.y, 260, 'fx');
-        }
-      }
-      for (const f of this.map.foods) {
-        if (f.x > L.x + 30) break;
-        if (this.foodEaten.has(f.id) || f.x < L.x - 30) continue;
-        if ((f.x - L.x) ** 2 + (f.y - L.y) ** 2 < reach) {
-          this.foodEaten.add(f.id);
-          L.hp = Math.min(L.maxHp, L.hp + RULES.foodHeal);
-          this.addFx('pickup', f.x, f.y, 260);
-          sfx.food();
-        }
-      }
-      for (const f of this.map.feathers) {
-        if (f.x > L.x + 30) break;
-        if (this.featherTaken.has(f.id) || f.x < L.x - 30) continue;
-        if ((f.x - L.x) ** 2 + (f.y - L.y) ** 2 < reach) {
-          this.featherTaken.add(f.id);
-          L.feathers++;
-          this.addFx('pickup', f.x, f.y, 260);
-          sfx.feather();
-        }
-      }
-      // 기술 아이콘: 먹으면 그 칸 기술을 하나 든다
-      const sk = this.map.skills;
-      for (let i = lowerBound(sk, L.x - 30); i < sk.length && sk[i].x < L.x + 30; i++) {
-        const it = sk[i];
-        if (this.grabbed.has(it.id)) continue;
-        if ((it.x - L.x) ** 2 + (it.y - L.y) ** 2 < (r + 16) ** 2) {
-          this.grabbed.add(it.id);
-          socket.emit('race:grab', it.id);
-          this.addFx('pickup', it.x, it.y, 260, 'fx');
-          sfx.gem();
-        }
-      }
-      // 시간이 지나며 HP 감소
-      L.hp -= RULES.hpDrainPerSec * dt;
-      if (L.hp <= 0) this.loseLife('hp');
-    }
-
-    // 좁은 목 통과
-    const nice = this.map.nice;
-    while (L.niceIdx < nice.length && nice[L.niceIdx].x < L.x) {
-      if (!L.ghost && !L.dead && !dashing) {
-        socket.emit('race:nice', L.niceIdx);
-        this.popups.push({ img: 'nice', x: L.x, y: L.y - 45, t0: now, dur: 900 });
-        sfx.nice();
-      }
-      L.niceIdx++;
-    }
-  }
-
-  recenter() {
-    const tb = terrainAt(this.map, this.L.x);
-    this.L.y = (tb.top + tb.bottom) / 2;
-    this.L.vy = 0;
-  }
-
-  pushInside(r) {
-    const tb = terrainAt(this.map, this.L.x);
-    this.L.y = clamp(this.L.y, tb.top + r + 2, tb.bottom - r - 2);
-    this.L.vy = 0;
-  }
-
-  damage(dmg, by, kind, local = false) {
-    const L = this.L;
-    const now = performance.now();
-    if (L.dead || L.ghost || now < L.invUntil || now < L.dashUntil) return;
-    if (L.shield && !local) {
-      L.shield = false;
-      this.addFx('hit', L.x, L.y, 280);
-      sfx.shield();
-      return;
-    }
-    L.hp -= dmg;
-    L.hurtUntil = now + 380;
-    if (by) L.lastHit = { by, at: now };
-    this.shakeUntil = now + 180;
-    this.addFx('hit', L.x, L.y, 280);
-    sfx.hit();
-    if (L.hp <= 0) this.loseLife(kind || 'hit');
-  }
-
-  debuff(effect, ms, by) {
-    const L = this.L;
-    const now = performance.now();
-    if (L.dead || L.ghost || now < L.invUntil || now < L.dashUntil) return;
-    if (!(effect in L.eff)) return;
-    L.eff[effect] = now + ms;
-    L.lastHit = { by, at: now };
-    sfx.hit();
-  }
-
-  applySelf(skill) {
-    const L = this.L;
-    const now = performance.now();
-    if (L.dead || L.ghost) return;
-    if (skill === 'dash') {
-      L.dashUntil = now + SKILLS.dash.ms;
-      sfx.dash();
-    } else if (skill === 'shield') {
-      L.shield = true;
-      sfx.shield();
-    } else if (skill === 'repair') {
-      L.hp = Math.min(L.maxHp, L.hp + SKILLS.repair.heal);
-      sfx.heal();
-    } else if (skill === 'glide') {
-      L.eff.glide = now + SKILLS.glide.ms;
-      sfx.feather();
-    } else if (skill === 'fold') {
-      L.eff.small = now + SKILLS.fold.ms;
-      sfx.feather();
-    }
-  }
-
-  loseLife(cause) {
-    const L = this.L;
-    const now = performance.now();
-    if (L.dead || L.ghost) return;
-    const by = L.lastHit && now - L.lastHit.at < RULES.killCreditMs ? L.lastHit.by : null;
-    L.lives -= 1;
-    L.lastHit = null;
-    socket.emit('race:lifeLost', { by, cause, lv: L.lives });
-    this.addFx('hit', L.x, L.y, 320);
-    this.shakeUntil = now + 300;
-    for (const k of Object.keys(L.eff)) L.eff[k] = 0;
-    // 목숨 둘을 다 잃으면 탈락. 거리 기록은 여기서 끝나고, 유령으로 같이 날지 관전할지 고른다
-    if (L.lives <= 0) {
-      L.ghost = true;
-      L.hp = 0;
-      L.shield = false;
-      sfx.ghost();
-      socket.emit('race:final');
-      // 혼자 남은 사람이 탈락하면 서버가 곧바로 레이스를 끝낸다. 그때는 고르는 창을 띄우지 않는다
-      setTimeout(() => {
-        if (!this.ended && L.ghost && !L.dead) this.hooks.onGhost && this.hooks.onGhost();
-      }, 400);
-    } else {
-      L.hp = L.maxHp;
-      L.invUntil = now + RULES.lifeLostInvulnMs;
-      sfx.lifeLost();
-    }
-    this.recenter();
+    stepBody(this.L, this.input, dt, t, performance.now(), this.bodyHooks);
   }
 
   // 유령이 관전으로 넘어간다. 기록은 유령이 될 때 이미 끝났다
@@ -622,61 +436,23 @@ export class Game {
   sendState(ts) {
     if (ts - this.lastSend < 1000 / RULES.sendHz) return;
     this.lastSend = ts;
-    const L = this.L;
-    const now = performance.now();
-    socket.volatile.emit('race:state', {
-      x: Math.round(L.x * 10) / 10,
-      y: Math.round(L.y * 10) / 10,
-      vx: Math.round(L.vx),
-      vy: Math.round(L.vy),
-      hp: Math.max(0, Math.ceil(L.hp)),
-      mhp: L.maxHp,
-      lv: L.lives,
-      ghost: L.ghost,
-      dead: L.dead,
-      dist: Math.max(0, (L.x - L.ghostDist) / RULES.pxPerMeter),
-      inv: now < L.invUntil || now < L.dashUntil,
-      shield: L.shield,
-      small: now < L.eff.small,
-      a: this.animOf(),
-      e: this.effFlags(),
-    });
-  }
-
-  animOf() {
-    const L = this.L;
-    const now = performance.now();
-    if (L.ghost) return 'ghost';
-    if (now < L.hurtUntil) return 'hurt';
-    if (now < L.dashUntil || (this.input.boost && L.vx > deriveStats(this.ch.stats, L.feathers).baseSpeed + 8)) return 'boost';
-    return 'fly';
-  }
-
-  effFlags() {
-    const L = this.L;
-    const now = performance.now();
-    let s = '';
-    if (now < L.dashUntil) s += 'd';
-    if (now < L.invUntil) s += 'i';
-    for (const [k, c] of [['blind', 'b'], ['heavy', 'h'], ['shake', 's'], ['slow', 'w'], ['glide', 'g'], ['small', 'm']]) {
-      if (now < L.eff[k]) s += c;
-    }
-    return s;
+    socket.volatile.emit('race:state', bodyState(this.L, this.input, performance.now()));
   }
 
   cleanup() {
     const now = performance.now();
-    for (const [id, at] of this.gemPending) if (now - at > 1200) this.gemPending.delete(id);
-    this.fx = this.fx.filter((f) => now - f.t0 < f.dur);
-    this.crumbs = this.crumbs.filter((c) => now - c.t0 < c.life);
-    this.popups = this.popups.filter((p) => now - p.t0 < p.dur);
-    this.feed = this.feed.filter((f) => now - f.t0 < 5000);
+    for (const [id, at] of this.L.gemAsked) if (now - at > GEM_RETRY_MS) this.L.gemAsked.delete(id);
+    prune(this.fx, (f) => now - f.t0 < f.dur);
+    prune(this.crumbs, (c) => now - c.t0 < c.life);
+    prune(this.popups, (p) => now - p.t0 < p.dur);
+    prune(this.feed, (f) => now - f.t0 < 5000);
     for (const [id, p] of this.puddles) if (now > p.until) this.puddles.delete(id);
     for (const [id, pr] of this.projectiles) if (now - pr.start > pr.lifeMs + 200) this.projectiles.delete(id);
   }
 
-  addFx(name, x, y, dur, atlas = 'fx', follow = null) {
-    this.fx.push({ name, x, y, t0: performance.now(), dur, atlas, follow });
+  // follow를 주면 그 사람을 따라다니며 그린다
+  addFx(name, x, y, dur, follow = null) {
+    this.fx.push({ name, x, y, t0: performance.now(), dur, follow });
   }
 
   remoteFx(d) {
@@ -686,11 +462,11 @@ export class Game {
       if (d.target === this.myId) sfx.warn();
     } else if (d.type === 'bolt') {
       this.boltWarn.delete(d.target);
-      this.addFx('boltHit', 0, 0, 360, 'fx', d.target);
-      this.addFx('boltSeg', 0, 0, 260, 'fx', d.target);
+      this.addFx('boltHit', 0, 0, 360, d.target);
+      this.addFx('boltSeg', 0, 0, 260, d.target);
       sfx.bolt();
     } else if (d.type === 'shake') {
-      for (const id of d.targets || []) this.addFx('whirl', 0, 0, 2500, 'fx', id);
+      for (const id of d.targets || []) this.addFx('whirl', 0, 0, SKILLS.whirl.ms, id);
     }
   }
 
@@ -704,7 +480,10 @@ export class Game {
       const pos = this.posOf(d.by);
       if (pos) this.popups.push({ img: 'kill', x: pos.x, y: pos.y - 45, t0: now, dur: 1000 });
       if (d.by === this.myId) sfx.kill();
-    } else if (d.type === 'crash') text = `${name(d.target)} 부딪힘, 남은 생명 ${Math.max(0, d.lv)}개`;
+    } else if (d.type === 'crash') {
+      const why = CRASH_TEXT[d.cause] ?? '공격에 맞음';
+      text = `${name(d.target)} ${why}, 남은 생명 ${Math.max(0, d.lv)}개`;
+    }
     else if (d.type === 'out') text = `${name(d.target)} 탈락`;
     else if (d.type === 'left') text = `${name(d.target)} 나감`;
     else if (d.type === 'nice' && d.target !== this.myId) text = `${name(d.target)} NICE`;
@@ -715,20 +494,26 @@ export class Game {
   remoteState(p, renderT) {
     const s = p.snaps;
     if (!s.length) return null;
-    if (renderT <= s[0].t) return s[0];
+    const v = p._buf || (p._buf = {}); // 매 프레임 다시 쓰는 위치 객체
+    if (renderT <= s[0].t) return Object.assign(v, s[0]);
     for (let i = s.length - 1; i >= 0; i--) {
       if (s[i].t <= renderT) {
         const a = s[i];
         const b = s[i + 1];
         if (!b) {
           const k = Math.min(0.2, (renderT - a.t) / 1000);
-          return { ...a, x: a.x + a.vx * k, y: a.y };
+          Object.assign(v, a);
+          v.x = a.x + a.vx * k;
+          return v;
         }
         const k = (renderT - a.t) / (b.t - a.t || 1);
-        return { ...b, x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+        Object.assign(v, b);
+        v.x = a.x + (b.x - a.x) * k;
+        v.y = a.y + (b.y - a.y) * k;
+        return v;
       }
     }
-    return s[s.length - 1];
+    return Object.assign(v, s[s.length - 1]);
   }
 
   posOf(id) {
@@ -737,17 +522,24 @@ export class Game {
     return p ? p._view || null : null;
   }
 
+  // 점수 순위. 점수 = 거리 + 보석 점수. out은 기록이 끝났는지, dead는 화면에서 사라졌는지
   standings() {
+    if (this.rankFrame === this.frameNo) return this.rank;
     const list = [];
     for (const p of this.players.values()) {
       if (p.id === this.myId) {
         const L = this.L;
-        list.push({ p, dist: Math.max(0, (L.x - L.ghostDist) / RULES.pxPerMeter), ghost: L.ghost, dead: L.dead, x: L.x });
+        const dist = bodyDist(L);
+        list.push({ p, dist, score: dist + this.gemScore, ghost: L.ghost, dead: L.dead, out: L.ghost || L.dead });
       } else if (p.cur) {
-        list.push({ p, dist: p.cur.dist, ghost: p.cur.ghost, dead: p.cur.dead, x: p._view ? p._view.x : p.cur.x });
-      } else list.push({ p, dist: 0, ghost: false, dead: false, x: 0 });
+        const c = p.cur;
+        list.push({ p, dist: c.dist, score: c.score ?? c.dist, ghost: c.ghost, dead: c.dead, out: !!c.out });
+      } else list.push({ p, dist: 0, score: 0, ghost: false, dead: false, out: false });
     }
-    return list.sort((a, b) => b.dist - a.dist);
+    list.sort((a, b) => b.score - a.score || b.dist - a.dist);
+    this.rank = list;
+    this.rankFrame = this.frameNo;
+    return list;
   }
 
   // ── 그리기 ──
@@ -785,7 +577,10 @@ export class Game {
     this.camX = camX;
     const tw = Math.max(0, t);
 
-    this.fitCanvas();
+    if (this.needFit) {
+      this.needFit = false;
+      this.fitCanvas();
+    }
     const S = this.S;
     ctx.setTransform(S, 0, 0, S, 0, 0);
     ctx.clearRect(0, 0, W, H);
@@ -803,34 +598,30 @@ export class Game {
     this.drawPopups(now);
 
     ctx.setTransform(S, 0, 0, S, 0, 0);
-    this.drawParticles((camX - prevCam) * Z, now);
+    this.drawParticles((camX - prevCam) * Z, now, dt);
     if (!L.dead && !L.ghost && now < L.eff.blind) this.drawFog(now);
     this.drawHud(t, now);
   }
 
+  // 먼 배경일수록 옅은 하늘색 안개를 더 덮은 그림이다. 앞에 그리는 땅과 장애물이 배경과 섞이지 않고 도드라진다
   drawBackground(camX) {
     const ctx = this.ctx;
-    const w = this.world;
-    if (w.sky) ctx.drawImage(w.sky, 0, 0, Math.round(w.sky.width * w.k.sky), Math.round(w.sky.height * w.k.sky));
-    // 먼 배경일수록 옅은 하늘색 안개를 더 덮는다. 앞에 그리는 땅과 장애물이 배경과 섞이지 않고 도드라진다
-    const [hc, hFar, hMid] = HAZE[this.theme] || HAZE.default;
-    for (const [img, f, k, haze] of [[w.far, 0.15, w.k.far, hFar], [w.mid, 0.4, w.k.mid, hMid]]) {
-      if (img) {
-        const iw = Math.round(img.width * k);
-        const ih = Math.round(img.height * k);
-        const off = -(((Math.round(camX * f) % iw) + iw) % iw);
-        ctx.drawImage(img, off, 0, iw, ih);
-        ctx.drawImage(img, off + iw, 0, iw, ih);
-      }
-      ctx.fillStyle = `rgba(${hc}, ${haze})`;
-      ctx.fillRect(0, 0, W, H);
+    const bg = this.bg;
+    if (bg.sky) ctx.drawImage(bg.sky, 0, 0);
+    for (const [img, f] of [[bg.far, 0.15], [bg.mid, 0.4]]) {
+      if (!img) continue;
+      const iw = img.width;
+      const off = -(((Math.round(camX * f) % iw) + iw) % iw);
+      // 그림이 화면보다 좁아도 빈틈 없이 이어 그린다
+      for (let x = off; x < W; x += iw) ctx.drawImage(img, x, 0);
     }
   }
 
   drawTerrain(camX) {
     const ctx = this.ctx;
     const tiles = this.world.tiles;
-    const x0 = Math.floor(camX / 4) * 4 - 4;
+    const seg = this.map.seg;
+    const x0 = Math.floor(camX / seg) * seg - seg;
     const x1 = camX + VW + 8;
     const ce = this.ceilEdge;
     const fe = this.floorEdge;
@@ -867,9 +658,9 @@ export class Game {
       }
       return ws ? h + (hs / ws - h) * wmax : h;
     };
-    // 지형 표본은 4 맵 단위마다 있고 그 사이는 직선이다. 표본마다 위아래 높이를 잰다
+    // 지형 표본은 seg 맵 단위마다 있고 그 사이는 직선이다. 표본마다 위아래 높이를 잰다
     const pts = [];
-    for (let x = x0; x <= x1 + 4; x += 4) {
+    for (let x = x0; x <= x1 + seg; x += seg) {
       const tb = terrainAt(this.map, x);
       pts.push([x, pinned(pins.ceil, x, tb.top), pinned(pins.floor, x, tb.bottom)]);
     }
@@ -1001,18 +792,18 @@ export class Game {
     const gems = this.map.gems;
     for (let i = lowerBound(gems, camX - 16); i < gems.length && gems[i].x < camX + VW + 16; i++) {
       const g = gems[i];
-      if (this.gemTaken.has(g.id) || this.gemPending.has(g.id)) continue;
+      if (this.L.gemTaken.has(g.id) || this.L.gemAsked.has(g.id)) continue;
       items.draw(ctx, g.red ? 'gemRed' : 'gemBlue', g.x, g.y + Math.round(Math.sin(t * 3 + g.id) * 1.5), { t: t + g.id * 0.11 });
     }
     for (const f of this.map.foods) {
-      if (f.x < camX - 16 || f.x > camX + VW + 16 || this.foodEaten.has(f.id)) continue;
+      if (f.x < camX - 16 || f.x > camX + VW + 16 || this.L.foodEaten.has(f.id)) continue;
       items.draw(ctx, 'food', f.x, f.y, { t });
     }
     // 기술 아이콘: 빛 방울 안에 내 캐릭터의 그 칸 기술
     const sk = this.map.skills;
     for (let i = lowerBound(sk, camX - 20); i < sk.length && sk[i].x < camX + VW + 20; i++) {
       const it = sk[i];
-      if (this.grabbed.has(it.id)) continue;
+      if (this.L.grabbed.has(it.id)) continue;
       const y = it.y + Math.round(Math.sin(t * 2.4 + it.id) * 2);
       ctx.beginPath();
       ctx.arc(it.x, y, 15, 0, Math.PI * 2);
@@ -1024,7 +815,7 @@ export class Game {
       ART.hud.draw(ctx, 'icon_' + this.ch.skills[it.slot - 1], it.x, y, { scale: 0.62 });
     }
     for (const f of this.map.feathers) {
-      if (f.x < camX - 16 || f.x > camX + VW + 16 || this.featherTaken.has(f.id)) continue;
+      if (f.x < camX - 16 || f.x > camX + VW + 16 || this.L.featherTaken.has(f.id)) continue;
       items.draw(ctx, 'feather', f.x, f.y + Math.round(Math.sin(t * 2 + f.id) * 2), { t });
     }
   }
@@ -1059,44 +850,43 @@ export class Game {
     const L = this.L;
     if (!L.dead) {
       list.push({
-        p: this.me, x: L.x, y: L.y, anim: this.animOf(), e: this.effFlags(),
+        p: this.me, x: L.x, y: L.y, anim: animOf(L, this.input, now), e: effFlags(L, now),
         ghost: L.ghost, shield: L.shield, small: now < L.eff.small, self: true,
       });
     }
     for (const d of list) this.drawFlyer(d, t, now);
   }
 
+  // 캐릭터와 머리 위 그림은 자리를 반올림하지 않는다. 카메라는 매끄럽게 따라가는데
+  // 캐릭터만 맵 1칸 단위로 끊어 그리면 확대된 화면에서 앞뒤로 떨려 보인다
   drawFlyer(d, t, now) {
     const ctx = this.ctx;
     const atlas = ART.chars[d.p.charId];
-    const x = Math.round(d.x);
-    const y = Math.round(d.y);
+    const { x, y } = d;
     const blink = d.e.includes('i') && Math.floor(now / 90) % 2 === 0;
-    if (d.e.includes('d')) ART.fx.draw(ctx, 'dash', x - 33, y, { t });
+    if (d.e.includes('d')) ART.fx.draw(ctx, 'dash', x - 33, y, { t, sub: true });
     const alpha = d.ghost ? 0.78 : blink ? 0.35 : d.self ? 1 : 0.92;
     const anim = atlas.has(d.anim) ? d.anim : 'fly';
     const at = t + d.p.color * 0.21;
     const sc = d.small ? 0.5 : 1;
     // 가속 바람줄은 몸 뒤에서 뻗어 나가도록 캐릭터보다 먼저 그린다
     if (anim === 'boost' && !d.ghost && ART.particles?.has('streak')) {
-      ART.particles.draw(ctx, 'streak', x - 14 * sc, y - 15 * sc, { t, scale: sc, alpha });
+      ART.particles.draw(ctx, 'streak', x - 14 * sc, y - 15 * sc, { t, scale: sc, alpha, sub: true });
     }
     this.emitCrumb(d, atlas, anim, at, now, sc);
-    atlas.draw(ctx, anim, x, y, { t: at, alpha, scale: sc });
-    if (d.shield) ART.fx.draw(ctx, 'shield', x, y, { t, alpha: 0.85 });
+    atlas.draw(ctx, anim, x, y, { t: at, alpha, scale: sc, sub: true });
+    if (d.shield) ART.fx.draw(ctx, 'shield', x, y, { t, alpha: 0.85, sub: true });
 
     // 머리 위: 이름, 상태, 번개 조준
     let iy = y - 34;
     // 번개가 나를 노리면 머리 오른쪽 위에 느낌표
-    if (this.boltWarn.has(d.p.id) && now < this.boltWarn.get(d.p.id)) ART.fx.draw(ctx, 'warn', x + 26, y - 20, { t });
+    if (this.boltWarn.has(d.p.id) && now < this.boltWarn.get(d.p.id)) ART.fx.draw(ctx, 'warn', x + 26, y - 20, { t, sub: true });
     const icons = [];
-    for (const [c, n] of [['b', 'debuff_blind'], ['h', 'debuff_heavy'], ['s', 'debuff_shake'], ['w', 'debuff_slow'], ['g', 'buff_glide'], ['m', 'buff_shrink']]) {
-      if (d.e.includes(c)) icons.push(n);
-    }
+    for (const e of EFFECTS) if (d.e.includes(e.c)) icons.push(e.icon);
     if (icons.length) {
       let ix = x - (icons.length * 20) / 2 + 9;
       for (const n of icons) {
-        ART.fx.draw(ctx, n, ix, iy);
+        ART.fx.draw(ctx, n, ix, iy, { sub: true });
         ix += 20;
       }
       iy -= 18;
@@ -1105,7 +895,7 @@ export class Game {
       ctx.font = FONT_SMALL;
       this.text(d.p.name, x, iy - 12, PLAYER_COLORS[d.p.color], 'center');
     } else if (this.players.size > 1) {
-      ART.fx.draw(ctx, 'miniMarker' + d.p.color, x, iy - 2);
+      ART.fx.draw(ctx, 'miniMarker' + d.p.color, x, iy - 2, { sub: true });
     }
     this.drawBubble(d.p.id, x, iy - 17, now);
   }
@@ -1126,9 +916,12 @@ export class Game {
     }
     const ctx = this.ctx;
     ctx.font = FONT_SMALL;
-    if (!b.lines) b.lines = wrapText(ctx, b.text, BUBBLE_W, BUBBLE_LINES);
+    if (!b.lines) {
+      b.lines = wrapText(ctx, b.text, BUBBLE_W, BUBBLE_LINES);
+      b.w = Math.ceil(Math.max(...b.lines.map((l) => ctx.measureText(l).width))) + 10;
+    }
     const lh = 15;
-    const w = Math.ceil(Math.max(...b.lines.map((l) => ctx.measureText(l).width))) + 10;
+    const w = b.w;
     const h = b.lines.length * lh + 6;
     const bx = Math.round(x - w / 2);
     const by = Math.round(tipY - 3 - h);
@@ -1200,7 +993,7 @@ export class Game {
 
   drawFx(now) {
     for (const f of this.fx) {
-      const atlas = f.atlas === 'items' ? ART.items : ART.fx;
+      const atlas = ART.fx;
       let x = f.x;
       let y = f.y;
       if (f.follow) {
@@ -1244,20 +1037,22 @@ export class Game {
     }
   }
 
-  drawParticles(dcam, now) {
+  // 이동량은 60fps 한 프레임 기준이라 실제 흐른 시간을 곱해 화면 주사율과 상관없이 같은 빠르기로 움직인다
+  drawParticles(dcam, now, dt) {
     const tiles = this.world.tiles;
     if (!tiles.has('particle')) return;
     const theme = this.theme;
+    const f = dt * 60;
     for (const p of this.particles) {
       if (theme === 'storm') {
-        p.x -= 3.3 * p.s + dcam;
-        p.y += 10.5 * p.s;
+        p.x -= 3.3 * p.s * f + dcam;
+        p.y += 10.5 * p.s * f;
       } else if (theme === 'mushroom') {
-        p.x += Math.sin(now / 900 + p.p) * 0.45 - dcam * 0.6;
-        p.y += Math.cos(now / 1100 + p.p) * 0.38;
+        p.x += Math.sin(now / 900 + p.p) * 0.45 * f - dcam * 0.6;
+        p.y += Math.cos(now / 1100 + p.p) * 0.38 * f;
       } else {
-        p.x -= 0.75 * p.s + dcam * 0.8;
-        p.y += 0.5 * p.s + Math.sin(now / 700 + p.p) * 0.3;
+        p.x -= 0.75 * p.s * f + dcam * 0.8;
+        p.y += (0.5 * p.s + Math.sin(now / 700 + p.p) * 0.3) * f;
       }
       if (p.x < -10) p.x += W + 20;
       if (p.x > W + 10) p.x -= W + 20;
@@ -1278,14 +1073,58 @@ export class Game {
     }
   }
 
+  // 8방향 테두리를 두른 글씨. 한 번 쓰는 데 9번 그려야 해서, 화면 위 HUD 글씨는 한 번 그린 그림을 다시 쓴다.
+  // 맵 위에 떠서 움직이는 이름과 팝업은 자리를 반올림하지 않고 그대로 그린다
   text(str, x, y, color = '#fff', align = 'left') {
     const ctx = this.ctx;
-    ctx.textAlign = align;
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = '#181425';
-    for (const [dx, dy] of OUTLINE) ctx.fillText(str, x + dx, y + dy);
-    ctx.fillStyle = color;
-    ctx.fillText(str, x, y);
+    const m = ctx.getTransform();
+    if (Math.abs(m.a - this.S) > 1e-6 || m.b || m.c) {
+      ctx.textAlign = align;
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = INK;
+      for (const [dx, dy] of OUTLINE) ctx.fillText(str, x + dx, y + dy);
+      ctx.fillStyle = color;
+      ctx.fillText(str, x, y);
+      return;
+    }
+    const e = this.textImage(str, ctx.font, color, m.a);
+    const left = align === 'center' ? x - e.tw / 2 : align === 'right' ? x - e.tw : x;
+    // 화면 픽셀 칸에 맞춰 붙여 글씨가 번지지 않게 한다
+    const dx = (Math.round((left - 1) * m.a + m.e) - m.e) / m.a;
+    const dy = (Math.round((y - 1) * m.d + m.f) - m.f) / m.d;
+    ctx.drawImage(e.c, dx, dy, e.c.width / m.a, e.c.height / m.d);
+  }
+
+  textImage(str, font, color, scale) {
+    const key = `${scale}|${font}|${color}|${str}`;
+    const cache = this.textCache;
+    let e = cache.get(key);
+    if (e) {
+      // 최근에 쓴 것을 뒤로 보내 오래 안 쓴 것부터 지운다
+      cache.delete(key);
+      cache.set(key, e);
+      return e;
+    }
+    const mc = this.textCtx;
+    mc.font = font;
+    const tw = mc.measureText(str).width;
+    const px = parseInt(font, 10) || 18;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil((tw + 2) * scale) + 1;
+    c.height = Math.ceil((px * 1.5 + 2) * scale) + 1;
+    const g = c.getContext('2d');
+    g.setTransform(scale, 0, 0, scale, 0, 0);
+    g.font = font;
+    g.textAlign = 'left';
+    g.textBaseline = 'top';
+    g.fillStyle = INK;
+    for (const [ox, oy] of OUTLINE) g.fillText(str, 1 + ox, 1 + oy);
+    g.fillStyle = color;
+    g.fillText(str, 1, 1);
+    e = { c, tw };
+    cache.set(key, e);
+    if (cache.size > TEXT_CACHE_MAX) cache.delete(cache.keys().next().value);
+    return e;
   }
 
   // 채움 막대를 ratio만큼 그린다. 양 끝 둥근 부분은 그대로 두고 가운데만 늘이고 줄여 짧아져도 끝이 둥글다
@@ -1380,7 +1219,7 @@ export class Game {
     this.drawNum(tStr, tx + Math.round(tp.w * (hud.def.timerTextX || 0.62)), 6 + Math.round(tp.h * (hud.def.timerTextY || 0.5) - th / 2), 'M', 'center');
     ctx.globalAlpha = 1;
 
-    // 순위표: 구슬에 순위, 판 안에 거리, 판 왼쪽 바깥에 캐릭터와 이름
+    // 순위표: 구슬에 순위, 판 안에 점수, 판 왼쪽 바깥에 캐릭터와 이름
     const rank = this.standings();
     const [bx, by] = hud.def.rankBadge || [19, 19];
     rank.forEach((s, i) => {
@@ -1392,12 +1231,12 @@ export class Game {
       hud.drawAt(ctx, row, x, y);
       const ds = hud.size('digitS_0');
       this.drawNum(`${i + 1}`, x + bx, y + by - Math.round(ds.h / 2), 'S', 'center');
-      this.drawNum(`${Math.floor(s.dist)}`, x + rs.w - 9, y + Math.round((rs.h - ds.h) / 2), 'S', 'right');
+      this.drawNum(`${Math.floor(s.score)}`, x + rs.w - 9, y + Math.round((rs.h - ds.h) / 2), 'S', 'right');
       // 판 왼쪽에 진행 막대와 같은 흰 테두리 얼굴. 유령이면 흐리게
       const cx = x - 28;
       const face = 'face_' + s.p.charId;
       if (hud.has(face)) hud.draw(ctx, face, cx, y + Math.round(rs.h / 2), { scale: 0.9, alpha: s.ghost ? 0.55 : 1 });
-      if (s.dead) ui.drawAt(ctx, 'skull', cx - Math.round(ui.size('skull').w / 2), y + Math.round((rs.h - ui.size('skull').h) / 2));
+      if (s.out) ui.drawAt(ctx, 'skull', cx - Math.round(ui.size('skull').w / 2), y + Math.round((rs.h - ui.size('skull').h) / 2));
       let nx = x - 56;
       if (this.init.mode === 'team' && s.p.team) {
         const tw = ui.size('teamA').w;
@@ -1441,12 +1280,11 @@ export class Game {
     if (prog > 0) this.drawFill('miniFill', mx + px, my + py, prog);
     // 골 깃발: 얼굴이 닿는 막대 끝에 깃대를 세운다
     if (hud.has('goalFlag')) hud.draw(ctx, 'goalFlag', mx + px + pw - 3, my + py + ph + 3, { t: now / 1000 });
-    // 얼굴은 흰 테두리 얼굴 그림, 없으면 대기실 초상
+    // 얼굴은 순위표와 같은 흰 테두리 얼굴 그림
     const cid = (this.spectating || this.me).charId;
     const fx0 = Math.round(mx + px + pw * prog);
     const fy0 = Math.round(my + bs.h / 2);
-    if (hud.has('face_' + cid)) hud.draw(ctx, 'face_' + cid, fx0, fy0);
-    else if (ART.portraits[cid]) ctx.drawImage(ART.portraits[cid], fx0 - 17, fy0 - 17, 34, 34);
+    hud.draw(ctx, 'face_' + cid, fx0, fy0);
 
     // 소식
     ctx.font = FONT_HUD;
@@ -1459,7 +1297,7 @@ export class Game {
     });
 
     // 안내
-    ctx.font = FONT;
+    ctx.font = FONT_HUD;
     const hintY = sy - 52;
     if (L.ghost && !L.dead && !this.ended) this.text('유령 · 기록은 여기까지', W / 2, hintY, '#2ce8f5', 'center');
     if (this.spectating) {
@@ -1473,14 +1311,14 @@ export class Game {
     }
 
     // 출발 카운트다운
-    if (t < 0 && t > -3.2) {
+    if (t < 0 && t >= -3) {
       const n = Math.ceil(-t);
-      const pop = n + t > 0.85 ? 1.5 : 1;
-      ART.fx.draw(ctx, 'num' + Math.min(3, n), W / 2, H / 2 - 30, { scale: pop });
+      const pop = n + t < 0.15 ? 1.5 : 1; // 숫자가 바뀌는 순간 크게 튄다
+      ART.fx.draw(ctx, 'num' + n, W / 2, H / 2 - 30, { scale: pop });
     } else if (t >= 0 && t < 0.8) {
       ART.fx.draw(ctx, 'go', W / 2, H / 2 - 30, { alpha: t > 0.5 ? (0.8 - t) / 0.3 : 1 });
     }
-    if (t < -3.2) {
+    if (t < -3) {
       ctx.font = FONT_BIG;
       this.text(`${MAP_BY_ID[this.theme]?.name ?? ''}`, W / 2, H / 2 - 40, '#ffffff', 'center');
     }

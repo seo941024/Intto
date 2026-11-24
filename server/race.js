@@ -1,14 +1,21 @@
 // 한 판의 레이스. 각자 비행은 브라우저가 계산해 보내고,
-// 서버는 보석 소유·기술칸·발사체 명중·유령 부활·시간·순위를 판정한다.
-import { buildMap, terrainAt, MAPS } from '../shared/mapgen.js';
+// 서버는 보석·기술 아이콘·발사체 명중·생명·탈락·시간·점수와 순위를 판정한다.
+import { cachedMap, terrainAt, MAPS } from '../shared/mapgen.js';
 import { RULES } from '../shared/rules.js';
-import { CHARACTERS, CHARACTER_BY_ID, SKILLS } from '../shared/characters.js';
+import { CHARACTER_BY_ID, SKILLS, randomCharId } from '../shared/characters.js';
+import { DASH_VX } from '../shared/flight.js';
+import { EFFECTS } from '../shared/body.js';
 
-const TICK_MS = 33;
+const TICK_MS = 25; // 두 번에 한 번 스냅샷을 보내 초당 sendHz번이 되게 한다
 const SNAP_MS = 1000 / RULES.sendHz;
 const PROJ_R = 8;
 
 const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+const ANIMS = new Set(['fly', 'boost', 'hurt', 'ghost']);
+const EFFECT_FLAGS = new RegExp(`^[di${EFFECTS.map((e) => e.c).join('')}]*$`); // 대시, 무적, 걸린 효과 글자만
+const CAUSES = new Set(['terrain', 'obstacle', 'hp', 'hit', 'puff', 'nut', 'acorn', 'paper', 'bolt']);
+// 생명을 잃게 한 공격을 KILL로 쳐 주는 시간. 클라이언트 쪽 판정보다 조금 넉넉히 둔다
+const KILL_WINDOW_MS = RULES.killCreditMs + 1000;
 
 export class Race {
   // isBot(id)는 서버가 띄운 봇인지. 사람이 모두 탈락하면 일찍 끝낼 때 쓴다
@@ -19,11 +26,11 @@ export class Race {
     this.onEnd = onEnd;
     this.seed = Math.floor(Math.random() * 2 ** 31);
     this.mapId = room.mapId === 'random' ? MAPS[Math.floor(Math.random() * MAPS.length)].id : room.mapId;
-    this.map = buildMap(this.seed, this.mapId);
+    this.map = cachedMap(this.seed, this.mapId);
     this.mode = room.mode;
     this.players = new Map();
     room.ordered().forEach((m, i) => {
-      const charId = m.charId === 'random' ? CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id : m.charId;
+      const charId = m.charId === 'random' ? randomCharId() : m.charId;
       this.players.set(m.id, {
         id: m.id,
         name: m.name,
@@ -34,9 +41,11 @@ export class Race {
         slot: 0,
         s: null, // 마지막으로 받은 비행 상태
         at: 0,
-        ghost: false,
-        dead: false,
+        dead: false, // 기록이 끝남. 목숨을 다 잃었거나 나갔다
         dist: 0,
+        gemScore: 0,
+        livesLost: 0,
+        hitBy: null, // 마지막으로 이 사람에게 피해나 방해를 준 상대 { by, at }
         kills: 0,
         nices: 0,
         gems: 0,
@@ -56,7 +65,14 @@ export class Race {
     this.lastTick = now;
     this.lastSnap = 0;
     this.ended = false;
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+    // 한 번 계산하다 오류가 나도 레이스와 서버가 멈추지 않게 다음 계산으로 넘어간다
+    this.timer = setInterval(() => {
+      try {
+        this.tick();
+      } catch (err) {
+        console.error('[race tick]', err);
+      }
+    }, TICK_MS);
   }
 
   initPayload() {
@@ -83,7 +99,11 @@ export class Race {
     return !this.ended && now >= this.startAt && now < this.endAt;
   }
   alive(p) {
-    return p && p.connected && !p.dead && !p.ghost && p.s;
+    return p && p.connected && !p.dead && p.s;
+  }
+  // 화면 순위표처럼 소수점은 버린다
+  score(p) {
+    return Math.floor(p.dist + p.gemScore);
   }
   sameTeam(a, b) {
     return this.mode === 'team' && a.team && a.team === b.team;
@@ -94,41 +114,48 @@ export class Race {
     return { x: s.x + s.vx * lag, y: s.y + s.vy * lag };
   }
   bodyR(p) {
-    return p.s && p.s.small ? 6 : 12;
+    return p.s && p.s.small ? RULES.bodyRSmall : RULES.bodyR;
   }
 
   // ── 브라우저에서 오는 신호 ──
   onState(pid, s) {
     const p = this.players.get(pid);
     if (!p || this.ended || !s || typeof s !== 'object') return;
+    const now = Date.now();
     p.s = {
       x: num(s.x), y: num(s.y), vx: num(s.vx), vy: num(s.vy),
       hp: num(s.hp), mhp: num(s.mhp, 100), lv: num(s.lv),
       ghost: !!s.ghost, dead: !!s.dead,
       inv: !!s.inv, shield: !!s.shield, small: !!s.small,
-      a: typeof s.a === 'string' ? s.a.slice(0, 8) : 'fly',
-      e: typeof s.e === 'string' ? s.e.slice(0, 16) : '',
+      a: ANIMS.has(s.a) ? s.a : 'fly',
+      e: typeof s.e === 'string' && EFFECT_FLAGS.test(s.e) ? s.e.slice(0, 8) : '',
     };
-    p.at = Date.now();
-    p.ghost = p.s.ghost;
-    p.dist = Math.max(0, num(s.dist));
+    p.at = now;
+    // 거리는 기록이 끝나기 전까지만 받는다. 보낸 위치와 시간 안에 낼 수 있는 가장 빠른 거리를 넘지 못한다
+    if (!p.dead && now >= this.startAt) {
+      const cap = Math.min(p.s.x, (DASH_VX * (now - this.startAt + 1000)) / 1000) / RULES.pxPerMeter;
+      p.dist = Math.max(p.dist, Math.min(Math.max(0, num(s.dist)), cap));
+    }
     // 목숨 둘을 다 잃어 유령이 되면 그 자리에서 기록이 끝난다. 유령으로 같이 날아도 순위와 끝내기 판정에서는 빠진다
     if ((p.s.dead || p.s.ghost) && !p.dead) this.markOut(p);
   }
 
   onPickup(pid, gemId) {
     const p = this.players.get(pid);
+    if (!Number.isInteger(gemId)) return;
     const gem = this.map.gems[gemId];
     if (!this.running() || !this.alive(p) || !gem || this.gemTaken.has(gemId)) return;
     if (Math.abs(this.posOf(p, Date.now()).x - gem.x) > 390) return;
     this.gemTaken.add(gemId);
     p.gems++;
-    this.broadcast('race:gem', { id: gemId, by: pid, slot: p.slot });
+    p.gemScore += gem.red ? RULES.redGemScore : RULES.gemScore;
+    this.broadcast('race:gem', { id: gemId, by: pid });
   }
 
   // 기술 아이콘을 먹으면 그 칸의 기술을 하나 든다. 들고 있던 기술은 새 것으로 바뀐다
   onGrab(pid, itemId) {
     const p = this.players.get(pid);
+    if (!Number.isInteger(itemId)) return;
     const it = this.map.skills[itemId];
     if (!this.running() || !this.alive(p) || !it || p.grabbed.has(itemId)) return;
     if (Math.abs(this.posOf(p, Date.now()).x - it.x) > 390) return;
@@ -140,11 +167,12 @@ export class Race {
   onSkill(pid) {
     const p = this.players.get(pid);
     const now = Date.now();
-    if (!this.running(now) || !this.alive(p) || p.slot <= 0) return;
-    const skillId = CHARACTER_BY_ID[p.charId].skills[p.slot - 1];
-    const sk = SKILLS[skillId];
+    if (!this.running(now) || !this.alive(p) || !Number.isInteger(p.slot) || p.slot < 1) return;
+    const skillId = CHARACTER_BY_ID[p.charId]?.skills[p.slot - 1];
+    const sk = Object.hasOwn(SKILLS, skillId) ? SKILLS[skillId] : null;
+    if (!sk) return;
     p.slot = 0;
-    this.broadcast('race:skill', { by: pid, skill: skillId, slot: 0 });
+    this.broadcast('race:skill', { by: pid, skill: skillId });
     const pos = this.posOf(p, now);
 
     if (sk.kind === 'self') {
@@ -164,9 +192,11 @@ export class Race {
           (sk.area === 'around' && Math.abs(dx) <= sk.range);
         if (!ok) continue;
         targets.push(q.id);
+        q.hitBy = { by: pid, at: now };
         this.emitTo(q.id, 'race:debuff', { effect: sk.effect, ms: sk.ms, by: pid });
       }
-      this.broadcast('race:fx', { type: sk.effect, by: pid, targets });
+      // 다른 사람 화면에도 그리는 방해는 회오리뿐이다
+      if (sk.effect === 'shake') this.broadcast('race:fx', { type: sk.effect, by: pid, targets });
     } else if (sk.kind === 'bolt') {
       let best = null;
       let bestDx = Infinity;
@@ -181,8 +211,6 @@ export class Race {
       if (best) {
         this.pending.push({ at: now + sk.delayMs, type: 'bolt', by: pid, target: best.id, dmg: sk.dmg });
         this.broadcast('race:fx', { type: 'boltWarn', by: pid, target: best.id, ms: sk.delayMs });
-      } else {
-        this.broadcast('race:fx', { type: 'boltMiss', by: pid });
       }
     } else if (sk.kind === 'puddle') {
       const pd = {
@@ -194,22 +222,29 @@ export class Race {
     }
   }
 
+  // 생명은 한 판에 RULES.lives번까지만 잃는다. KILL은 서버가 그 사람에게 피해나 방해를 준 기록과 맞을 때만 친다
   onLifeLost(pid, d) {
     const p = this.players.get(pid);
-    if (!p || this.ended) return;
-    const by = d && typeof d.by === 'string' ? this.players.get(d.by) : null;
-    const lv = num(d && d.lv);
+    const now = Date.now();
+    if (!this.running(now) || !p || p.dead || p.livesLost >= RULES.lives) return;
+    p.livesLost++;
+    const lv = RULES.lives - p.livesLost;
+    const cause = d && CAUSES.has(d.cause) ? d.cause : 'terrain';
+    const claim = d && typeof d.by === 'string' ? d.by : null;
+    const by = claim && p.hitBy && p.hitBy.by === claim && now - p.hitBy.at < KILL_WINDOW_MS ? this.players.get(claim) : null;
     if (by && by !== p && !this.sameTeam(by, p)) {
       by.kills++;
       this.broadcast('race:event', { type: 'kill', by: by.id, target: pid, lv });
     } else {
-      this.broadcast('race:event', { type: 'crash', target: pid, lv });
+      this.broadcast('race:event', { type: 'crash', target: pid, lv, cause });
     }
   }
 
   onNice(pid, idx) {
     const p = this.players.get(pid);
     if (!this.running() || !this.alive(p) || !Number.isInteger(idx) || !this.map.nice[idx] || p.niceSeen.has(idx)) return;
+    // 좁은 목을 지나는 그 자리에서만 받는다
+    if (Math.abs(this.posOf(p, Date.now()).x - this.map.nice[idx].x) > 400) return;
     p.niceSeen.add(idx);
     p.nices++;
     this.broadcast('race:event', { type: 'nice', target: pid });
@@ -229,7 +264,6 @@ export class Race {
 
   markOut(p, why = 'out') {
     p.dead = true;
-    p.ghost = false;
     this.broadcast('race:event', { type: why, target: p.id });
     this.checkEnd();
   }
@@ -239,11 +273,26 @@ export class Race {
     const list = [...this.players.values()];
     const anyLeft = list.some((p) => p.connected && !p.dead);
     if (!anyLeft || Date.now() >= this.endAt) return this.end();
-    // 사람이 모두 탈락했고 남은 봇이 모두 사람보다 멀리 갔으면 사람 순위가 더 바뀌지 않으니 바로 끝낸다
+    // 사람이 모두 탈락했으면 결과가 더 바뀔 수 있는지 본다. 남은 봇의 점수는 늘기만 한다
     const humans = list.filter((p) => !p.bot);
     if (!humans.length || !humans.every((p) => p.dead)) return;
-    const best = Math.max(...humans.map((p) => p.dist));
-    if (list.every((p) => !p.bot || p.dead || !p.connected || p.dist > best)) this.end();
+    const racing = list.filter((p) => p.bot && !p.dead && p.connected);
+    // 남은 봇이 모두 사람보다 앞서야 사람 순위가 굳는다
+    const best = Math.max(...humans.map((p) => this.score(p)));
+    if (!racing.every((p) => this.score(p) > best)) return;
+    // 팀전은 팀 합계가 뒤집힐 수 없어야 끝낸다. 남은 봇이 모두 이미 앞선 팀이면 그 팀이 더 앞서 갈 뿐이다
+    if (this.mode === 'team') {
+      const totals = this.teamTotals();
+      const lead = totals.A === totals.B ? null : totals.A > totals.B ? 'A' : 'B';
+      if (!lead || racing.some((p) => p.team !== lead)) return;
+    }
+    this.end();
+  }
+
+  teamTotals() {
+    const totals = { A: 0, B: 0 };
+    for (const p of this.players.values()) if (p.team) totals[p.team] += this.score(p);
+    return totals;
   }
 
   // ── 서버 시계 ──
@@ -284,6 +333,7 @@ export class Race {
         if ((qp.x - pr.x) ** 2 + (qp.y - pr.y) ** 2 > rr * rr) continue;
         if (q.s.inv) continue; // 대시·무적 중에는 통과
         this.projectiles.splice(i, 1);
+        q.hitBy = { by: pr.by, at: now };
         this.emitTo(q.id, 'race:hit', { dmg: pr.dmg, by: pr.by, kind: pr.kind });
         this.broadcast('race:projGone', { id: pr.id, x: pr.x, y: pr.y, hit: true, target: q.id });
         break;
@@ -304,20 +354,25 @@ export class Race {
         if (Math.abs(qp.x - pd.x) < pd.r + 9 && Math.abs(qp.y - pd.y) < pd.r * 0.55 + 9) {
           pd.hitSet.add(q.id);
           if (!q.s.inv) {
+            q.hitBy = { by: pd.by, at: now };
             this.emitTo(q.id, 'race:debuff', { effect: pd.effect, ms: pd.ms, by: pd.by });
-            this.broadcast('race:fx', { type: 'oilHit', by: pd.by, targets: [q.id] });
           }
         }
       }
     }
 
-    if (now - this.lastSnap >= SNAP_MS) {
-      this.lastSnap = now;
+    // dead는 그 사람이 화면에서 사라졌는지, out은 기록이 끝났는지. 유령으로 나는 사람은 out이지만 dead가 아니라 다른 화면에도 그린다
+    // 타이머가 늦게 돌아도 평균 초당 sendHz번이 되도록 보낼 시각을 쌓아 간다
+    if (now - this.lastSnap >= SNAP_MS - TICK_MS / 2) {
+      this.lastSnap = Math.max(this.lastSnap + SNAP_MS, now - SNAP_MS);
       this.broadcast('race:snap', {
         t: now,
         p: [...this.players.values()]
           .filter((p) => p.s)
-          .map((p) => ({ id: p.id, ...p.s, dist: p.dist, slot: p.slot, dead: p.dead })),
+          .map((p) => ({
+            id: p.id, ...p.s, dist: p.dist, score: this.score(p), slot: p.slot,
+            dead: p.s.dead || !p.connected || (p.bot && p.dead), out: p.dead,
+          })),
       });
     }
   }
@@ -354,7 +409,10 @@ export class Race {
       const q = this.players.get(e.target);
       if (!this.alive(q)) return;
       this.broadcast('race:fx', { type: 'bolt', by: e.by, target: q.id });
-      if (!q.s.inv) this.emitTo(q.id, 'race:hit', { dmg: e.dmg, by: e.by, kind: 'bolt' });
+      if (!q.s.inv) {
+        q.hitBy = { by: e.by, at: now };
+        this.emitTo(q.id, 'race:hit', { dmg: e.dmg, by: e.by, kind: 'bolt' });
+      }
     }
   }
 
@@ -362,20 +420,22 @@ export class Race {
     if (this.ended) return;
     this.ended = true;
     clearInterval(this.timer);
+    // 순위는 점수 순. 점수 = 거리 + 보석 점수. 팀전은 팀원 점수 합계가 큰 팀이 이긴다
     const results = [...this.players.values()]
       .map((p) => ({
         id: p.id, name: p.name, charId: p.charId, team: p.team, color: p.color,
-        dist: Math.round(p.dist * 10) / 10, kills: p.kills, nices: p.nices, gems: p.gems,
+        dist: Math.round(p.dist * 10) / 10, score: this.score(p),
+        kills: p.kills, nices: p.nices, gems: p.gems,
       }))
-      .sort((a, b) => b.dist - a.dist);
+      .sort((a, b) => b.score - a.score || b.dist - a.dist);
     results.forEach((r, i) => (r.rank = i + 1));
     let winnerTeam = null;
+    let teamScores = null;
     if (this.mode === 'team') {
-      const best = { A: -1, B: -1 };
-      for (const r of results) if (r.team && r.dist > best[r.team]) best[r.team] = r.dist;
-      winnerTeam = best.A === best.B ? 'draw' : best.A > best.B ? 'A' : 'B';
+      teamScores = this.teamTotals();
+      winnerTeam = teamScores.A === teamScores.B ? 'draw' : teamScores.A > teamScores.B ? 'A' : 'B';
     }
-    const payload = { mapId: this.mapId, mode: this.mode, results, winnerTeam };
+    const payload = { mapId: this.mapId, mode: this.mode, results, winnerTeam, teamScores };
     this.broadcast('race:end', payload);
     this.onEnd(payload);
   }

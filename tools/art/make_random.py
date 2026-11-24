@@ -9,11 +9,8 @@
 import sys
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
+from artlib import key_crop, shrink  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -25,22 +22,8 @@ MAP_BOX = (700, 108, 1596, 576)  # 카드가 놓인 자리: 원본 좌표 x0, y0
 MAP_W = 640
 
 
-def keyed(path, box=None):
-    img = Image.open(path).convert("RGB")
-    if box:
-        img = img.crop(box)
-    a = unkey(np.asarray(img))
-    out = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-    return out.crop(out.getbbox())
-
-
-def shrink(img, k):
-    w, h = round(img.width * k), round(img.height * k)
-    return img.convert("RGBa").resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
-
-
 def main():
-    card = keyed(MAP_SHEET, MAP_BOX)
+    card = key_crop(MAP_SHEET, MAP_BOX)
     m = shrink(card, MAP_W / card.width)
     out = ROOT / "public" / "assets" / "ui" / "map_random.png"
     m.save(out)

@@ -2,6 +2,7 @@
 // 가로는 960 화면 기준 픽셀, 세로는 맵 높이 RULES.worldH 안에서 만든다.
 import { mulberry32, hashString } from './rng.js';
 import { RULES } from './rules.js';
+import { clamp } from './util.js';
 
 export const MAPS = [
   { id: 'cloud', name: '구름섬', desc: '바위와 가시 풍선이 떠다니는 넓은 하늘' },
@@ -10,8 +11,8 @@ export const MAPS = [
 ];
 export const MAP_BY_ID = Object.fromEntries(MAPS.map((m) => [m.id, m]));
 
-export const SEG = 4; // 지형 표본 간격, 화면도 4픽셀 세로줄로 그린다
-export const MAP_LENGTH = 120_000; // 8000m
+const SEG = 4; // 지형 표본 간격
+const MAP_LENGTH = 120_000; // 8000m
 const H = RULES.worldH;
 // 맵 위아래 끝에서 지형이 최소한 차지하는 두께. 위는 하트·타이머, 아래는 기술칸이 지형 위에 오도록 넉넉히 둔다
 const EDGE_TOP = 30;
@@ -20,17 +21,17 @@ const MIN_PASS = 70; // 장애물 옆으로 반드시 남기는 통로 높이
 const MIN_GAP = 78; // 통로가 이보다 좁아지지 않게
 const START_GAP = 262; // 출발 직후 통로 폭
 
-// 장애물 충돌 범위. 그림은 public/assets/world/<theme>/obstacles.json
-export const OBSTACLE_GEOM = {
-  rock: { shape: 'circle', r: 18, variants: ['rock_a', 'rock_b', 'rock_c'] },
-  bigrock: { shape: 'circle', r: 27, variants: ['bigrock'] },
-  balloon: { shape: 'circle', r: 16, variants: ['balloon'], moving: true },
-  thorn: { shape: 'circle', r: 18, variants: ['thorn_a', 'thorn_b'] },
-  spore: { shape: 'circle', r: 14, variants: ['spore'], moving: true },
-  crystal: { shape: 'circle', r: 18, variants: ['crystal_a', 'crystal_b'] },
-  stormorb: { shape: 'circle', r: 16, variants: ['stormorb'], moving: true },
-  mushroom: { shape: 'mushroom', capW: 60, capTop: 55, capBottom: 34, stemW: 18, bounce: true }, // 버섯숲 그림의 높은 갓에 맞춘 높이
-  bolt: { shape: 'column', w: 18 },
+// 장애물 충돌 범위. 판정 모양은 circleHitsObstacle이 종류별로 고른다. 그림은 public/assets/world/<theme>/obstacles.json
+const OBSTACLE_GEOM = {
+  rock: { r: 18, variants: ['rock_a', 'rock_b', 'rock_c'] },
+  bigrock: { r: 27, variants: ['bigrock'] },
+  balloon: { r: 16, variants: ['balloon'], moving: true },
+  thorn: { r: 18, variants: ['thorn_a', 'thorn_b'] },
+  spore: { r: 14, variants: ['spore'], moving: true },
+  crystal: { r: 18, variants: ['crystal_a', 'crystal_b'] },
+  stormorb: { r: 16, variants: ['stormorb'], moving: true },
+  mushroom: { capW: 60, capTop: 55, capBottom: 34, stemW: 18 }, // 버섯숲 그림의 높은 갓에 맞춘 높이
+  bolt: { w: 18 },
 };
 
 const THEMES = {
@@ -53,7 +54,6 @@ const THEMES = {
   },
 };
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const clamp01 = (v) => clamp(v, 0, 1);
 const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -79,7 +79,7 @@ function weightedPick(rng, list) {
 }
 
 export function buildMap(seed, mapId) {
-  const theme = THEMES[mapId] ?? THEMES.cloud;
+  const theme = Object.hasOwn(THEMES, mapId) ? THEMES[mapId] : THEMES.cloud;
   const rng = mulberry32((seed ^ hashString(mapId)) >>> 0);
   const n = Math.ceil(MAP_LENGTH / SEG) + 1;
   const top = new Float32Array(n);
@@ -151,15 +151,12 @@ export function buildMap(seed, mapId) {
   }
 
   const map = {
-    id: mapId, seed, seg: SEG, length: MAP_LENGTH,
+    seg: SEG,
     top, bottom,
     obstacles: [], gems: [], foods: [], feathers: [], nice: [], skills: [],
   };
 
-  for (const chk of chokes) {
-    const tb = terrainAt(map, chk.x);
-    map.nice.push({ x: chk.x, gap: tb.bottom - tb.top });
-  }
+  for (const chk of chokes) map.nice.push({ x: chk.x });
 
   const nearChoke = (x, pad) => chokes.some((k) => Math.abs(x - k.x) < k.w / 2 + pad);
   const nearObstacle = (x, pad) => map.obstacles.some((o) => Math.abs(o.x - x) < pad);
@@ -334,13 +331,33 @@ export function terrainAt(map, x) {
   };
 }
 
+// 몸 가운데와 양옆 0.7r 자리 세 곳에서 위아래 땅에 닿는지 본다. 봇이 계획할 때 아주 자주 불러 배열을 만들지 않는다
 export function circleHitsTerrain(map, x, y, r) {
-  for (const dx of [-r * 0.7, 0, r * 0.7]) {
-    const tb = terrainAt(map, x + dx);
-    const rr = dx === 0 ? r : r * 0.7;
-    if (y - rr < tb.top || y + rr > tb.bottom) return true;
+  let tb = terrainAt(map, x);
+  if (y - r < tb.top || y + r > tb.bottom) return true;
+  const s = r * 0.7;
+  tb = terrainAt(map, x - s);
+  if (y - s < tb.top || y + s > tb.bottom) return true;
+  tb = terrainAt(map, x + s);
+  return y - s < tb.top || y + s > tb.bottom;
+}
+
+// 출발 높이. 출발 통로 가운데 둘레에 네 명을 20씩 나란히 세운다
+export function startY(color) {
+  return (EDGE_TOP + H - EDGE_BOT) / 2 - 30 + color * 20;
+}
+
+// 서버에서는 한 판의 레이스와 그 판의 봇들이 같은 맵을 같이 쓴다. 최근 맵 몇 개만 남긴다
+const mapCache = new Map();
+export function cachedMap(seed, mapId) {
+  const key = `${seed}:${mapId}`;
+  let m = mapCache.get(key);
+  if (!m) {
+    m = buildMap(seed, mapId);
+    mapCache.set(key, m);
+    if (mapCache.size > 8) mapCache.delete(mapCache.keys().next().value);
   }
-  return false;
+  return m;
 }
 
 export function obstacleY(o, t) {

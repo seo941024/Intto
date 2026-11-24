@@ -13,8 +13,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
-from pack_concept import scaled  # noqa: E402
+from artlib import unkey, shrink, to_img  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -29,9 +28,9 @@ def main():
     a = unkey(np.asarray(Image.open(SRC).convert("RGB")))
     # 바탕 마젠타가 고르지 않아 흐릿하게 남는 점은 지우고, 글자가 있는 자리만 잘라 쓴다
     a[a[..., 3] < 40] = 0
-    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
+    img = to_img(a)
     img = img.crop(img.getbbox())
-    out = scaled(img, HEIGHT / img.height)
+    out = shrink(img, HEIGHT / img.height)
     out.save(OUT)
     print(f"원본 글자 {img.width}×{img.height} → {out.width}×{out.height}, {OUT}")
 

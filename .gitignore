@@ -3,3 +3,16 @@ node_modules/
 # art_inbox에는 게임 그림 원본만 올린다. 개인 문서가 섞여 있어 그림이 아닌 파일은 뺀다
 art_inbox/**/*.pdf
 art_inbox/**/*.zip
+# 파이썬 캐시와 그림 도구의 확대 미리보기는 올리지 않는다
+__pycache__/
+tools/art/_preview/
+# art_inbox/out은 도구가 다시 만드는 중간 결과라 올리지 않는다. pack_concept.py가 읽는 cut_concept.py 조각 여섯 개만 올린다
+art_inbox/out/*
+!art_inbox/out/cut/
+art_inbox/out/cut/*
+!art_inbox/out/cut/gem_blue_a.png
+!art_inbox/out/cut/gem_red.png
+!art_inbox/out/cut/meat.png
+!art_inbox/out/cut/feather.png
+!art_inbox/out/cut/rock.png
+!art_inbox/out/cut/balloon_a.png

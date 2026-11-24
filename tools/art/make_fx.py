@@ -20,7 +20,6 @@ res 2880으로 넣어 큰 화면에서도 늘리지 않고 줄여 그린다.
 사용
   python tools/art/make_fx.py
 """
-import json
 import sys
 from pathlib import Path
 
@@ -28,8 +27,8 @@ import numpy as np
 from PIL import Image, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
-from pack_concept import Packer, write_atlas, scaled  # noqa: E402
+from artlib import unkey, shrink, to_img  # noqa: E402
+from pack_concept import Packer, write_atlas  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -82,7 +81,7 @@ def pieces(src=SRC, rows_spec=None):
     """줄마다 빈 세로줄로 그림을 가르고, 틈이 범위 안인 조각은 한 그림으로 붙인다"""
     rows_spec = rows_spec or ROWS
     k = unkey(np.asarray(Image.open(src).convert("RGB")))
-    img = Image.fromarray(np.clip(k, 0, 255).astype(np.uint8), "RGBA")
+    img = to_img(k)
     a = k[..., 3] > 100
     rows = a.any(1)
     bands = []
@@ -120,7 +119,7 @@ def pieces(src=SRC, rows_spec=None):
 
 def fit(img, box):
     k = min(box[0] * PX / img.width, box[1] * PX / img.height)
-    return scaled(img, k)
+    return shrink(img, k)
 
 
 def main():
@@ -133,10 +132,10 @@ def main():
     for names, h in GROUPS:
         k = h * PX / max(src[n].height for n in names)
         for n in names:
-            imgs[n] = scaled(src[n], k)
+            imgs[n] = shrink(src[n], k)
     zx = pieces(ZX_SRC, [(["keyZ", "keyX"], (0, 0))])
     for n, im in zx.items():
-        imgs[n] = scaled(im, imgs["keyW"].height / im.height)
+        imgs[n] = shrink(im, imgs["keyW"].height / im.height)
     for n in UNUSED_KEYS:
         del imgs[n]
 

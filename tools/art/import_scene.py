@@ -1,14 +1,16 @@
 """시안 그림체의 큰 배경 그림을 게임 크기로 옮긴다.
 
-몽실처럼 굵은 픽셀 그림은 import_ai.py로 칸을 찾아 줄이지만, 하늘이나 지형처럼 화면을 채우는 그림은
-가짜 픽셀이 작아서 칸을 찾으면 위치가 밀리고 거칠어진다. 그래서 게임 크기로 부드럽게 줄인다.
+하늘이나 지형처럼 화면을 채우는 그림은 가짜 픽셀이 작아서, 픽셀 칸을 찾아 줄이면 위치가 밀리고 거칠어진다.
+그래서 칸을 찾지 않고 게임 크기로 부드럽게 줄인다.
 
-  sky    한 장 전체를 화면 크기로
+  sky      한 장 전체를 화면 크기로
   band     마젠타 배경 위 가로 띠를 오려, 양 끝이 이어지게 맞춘 뒤 960×540 투명 층의 정해진 높이에 놓는다
   scatter  마젠타 배경 위 물체들을 하나씩 오려 투명 층에 흩어 놓는다. 중간 배경 섬처럼
 사용
+구름섬
   python tools/art/import_scene.py sky art_inbox/cloud_sky_v1.webp --out public/assets/world/cloud/sky.png
-  python tools/art/import_scene.py band art_inbox/cloud_far_v1.webp --out public/assets/world/cloud/far.png --bottom 470
+  python tools/art/import_scene.py band art_inbox/cloud_far_v1.webp --out public/assets/world/cloud/far.png --bottom 478
+  python tools/art/import_scene.py scatter art_inbox/cloud_mid_v1.webp --out public/assets/world/cloud/mid.png --scale 0.42 --scales 1,0.9,1.1,0.85,1 --tops 190,290,150,240,320
 버섯숲·폭풍협곡. 먼 배경은 폭포와 절벽이 섞여 비치지 않게 --seam cut으로 잇는다
   python tools/art/import_scene.py sky art_inbox/mushroom_sky_v1.png --out public/assets/world/mushroom/sky.png
   python tools/art/import_scene.py band art_inbox/mushroom_far_v1.png --out public/assets/world/mushroom/far.png --bottom 470 --seam cut
@@ -24,11 +26,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artlib import unkey, shrink, to_img  # noqa: E402
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 CONCEPT_K = 960 / 1672  # 시안 1672×941 → 게임 960×540
-MAGENTA = np.array([255, 0, 255], dtype=float)
 
 
 def cover(img, w, h):
@@ -39,19 +43,6 @@ def cover(img, w, h):
     x0 = (rw - w) // 2
     y0 = (rh - h) // 2
     return img.crop((x0, y0, x0 + w, y0 + h))
-
-
-def unkey(rgb):
-    """마젠타 배경을 투명으로. 경계의 반투명 픽셀은 마젠타 섞인 만큼 색을 되돌린다"""
-    a = rgb.astype(float)
-    dist = np.abs(a - MAGENTA).sum(-1)
-    alpha = np.clip((dist - 70) / 150, 0, 1)
-    safe = np.maximum(alpha, 1e-3)[..., None]
-    col = (a - (1 - alpha[..., None]) * MAGENTA) / safe
-    out = np.zeros(rgb.shape[:2] + (4,), dtype=float)
-    out[..., :3] = np.clip(col, 0, 255)
-    out[..., 3] = alpha * 255
-    return out
 
 
 def seamless(strip, overlap):
@@ -115,9 +106,9 @@ def run_band(args):
     rows = max(runs, key=len)
     band = keyed[rows.min():rows.max() + 1]
     band = seamless_cut(band, args.overlap) if args.seam == "cut" else seamless(band, args.overlap)
-    img = Image.fromarray(np.clip(band, 0, 255).astype(np.uint8), "RGBA")
+    img = to_img(band)
     k = args.scale
-    small = img.convert("RGBa").resize((round(img.width * k), round(img.height * k)), Image.Resampling.LANCZOS).convert("RGBA")
+    small = shrink(img, k)
     if args.fade > 0:
         # 띠 아래 끝이 일자로 잘려 있으면 하늘 구름 바다와 경계가 보이므로 아래쪽을 서서히 투명하게
         arr = np.array(small).astype(float)
@@ -177,9 +168,8 @@ def run_scatter(args):
     step = lw / len(parts)
     for i, part in enumerate(parts):
         part = haze(part, tuple(int(v) for v in args.haze_color.split(",")), args.haze)
-        img = Image.fromarray(np.clip(part, 0, 255).astype(np.uint8), "RGBA")
         k = args.scale * scales[i % len(scales)]
-        img = img.convert("RGBa").resize((round(img.width * k), round(img.height * k)), Image.Resampling.LANCZOS).convert("RGBA")
+        img = shrink(to_img(part), k)
         x = round(step * i + (step - img.width) / 2)
         canvas.alpha_composite(img, (x, tops[i % len(tops)]))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

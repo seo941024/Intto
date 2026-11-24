@@ -55,5 +55,6 @@ export const CHARACTERS = [
 ];
 
 export const CHARACTER_BY_ID = Object.fromEntries(CHARACTERS.map((c) => [c.id, c]));
+export const randomCharId = () => CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id;
 
 export const STAT_LABELS = { hp: 'HP', maxSpeed: '최대속도', accel: '가속력', weight: '무게' };

@@ -8,7 +8,9 @@
   decor      띠에서 떼어 낸 키 큰 장식. 띠는 땅 높이를 따라 4픽셀 세로줄로 잘려 붙으므로
              꽃이나 버섯처럼 위아래로 튀어나온 것은 따로 떼어 그 자리 땅 높이에 통째로 세운다
 카메라가 1.5배 당겨 보므로 res 1440으로 넣어 화면에서 1:1로 그려지게 한다.
-예전 아틀라스의 작은 입자 그림 particle은 크기를 맞춰 옮겨 싣는다.
+작은 입자 그림 particle은 입력 그림에서 만들지 않는다. 덮어쓰기 전 public/assets/world/<theme>/tiles.json에 든
+particle 프레임을 읽어 res 1440 크기로 맞춰 새 아틀라스에 그대로 옮겨 싣는다. 처음 만든 임시 도트 입자가 이렇게 이어져 왔다.
+그래서 tiles.json이 없으면 멈추고, 거기에 particle이 없으면 입자 없이 만든다.
 버섯숲처럼 천장 이끼 속에 버섯 갓이 반쯤 묻혀 있거나 띠 양 끝에 물체가 많은 그림은 인자로 맞춘다.
   --ceil-pct --floor-pct  경계선을 열마다 잰 높이의 중간값 대신 이 백분위로. 매달리거나 솟은 장식이 많으면 중간값이 땅에서 멀어진다
   --ceil-grow             천장 장식이 띠 속에 묻힌 부분까지 초록이 아닌 색을 따라 찾아 통째로 떼고, 빈자리는 속 무늬 색으로 메운다
@@ -32,7 +34,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey, seamless, seamless_cut  # noqa: E402
+from artlib import unkey, shrink, to_img, lum, dilate  # noqa: E402
+from import_scene import seamless, seamless_cut  # noqa: E402
 import paper_doll as pd  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -46,15 +49,6 @@ OVERLAP = 160  # 좌우 이음 폭, 원본 픽셀
 TALL = 24  # 경계선에서 이만큼 넘게 튀어나온 덩어리는 장식으로 뗀다, 원본 픽셀
 CUT = 4  # 장식은 경계선에서 이만큼 떨어진 줄부터 뗀다. 그 아래 밑동은 띠에 남는다
 OVER = 3  # 떼어 낸 장식이 띠 쪽으로 겹쳐 담기는 줄 수
-
-
-def to_img(arr):
-    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
-
-
-def shrink(img):
-    w, h = round(img.width * K), round(img.height * K)
-    return img.convert("RGBa").resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def tile_vertical(arr, overlap):
@@ -82,8 +76,7 @@ def fade(arr, rows, top):
 def object_color(edge):
     """이끼·풀처럼 초록 계열이 아닌 픽셀. 버섯 갓의 주황, 줄기·점의 크림색, 꽃의 흰색·노란색"""
     r, g, b = edge[..., 0], edge[..., 1], edge[..., 2]
-    lum = 0.3 * r + 0.59 * g + 0.11 * b
-    return (r - g > -12) & (lum > 70) & (edge[..., 3] > 20)
+    return (r - g > -12) & (lum(edge) > 70) & (edge[..., 3] > 20)
 
 
 def grow_into_band(edge, seed, inside):
@@ -92,15 +85,15 @@ def grow_into_band(edge, seed, inside):
     obj = object_color(edge) & inside
     grow = seed.copy()
     while True:
-        nxt = pd.dilate(grow) & (seed | obj)
+        nxt = dilate(grow) & (seed | obj)
         if (nxt == grow).all():
             break
         grow = nxt
-    lum = 0.3 * edge[..., 0] + 0.59 * edge[..., 1] + 0.11 * edge[..., 2]
+    light = lum(edge)
     ring = grow.copy()
     for _ in range(3):
-        ring = pd.dilate(ring)
-    dark = (lum < 100) & (edge[..., 3] > 0) & inside
+        ring = dilate(ring)
+    dark = (light < 100) & (edge[..., 3] > 0) & inside
     return grow | (ring & dark & ~grow)
 
 
@@ -142,7 +135,7 @@ def split_decor(edge, lip, up, tall=TALL, cut_gap=CUT, body=None):
             continue
         grow = m.copy()
         for _ in range(2):
-            grow = pd.dilate(grow)
+            grow = dilate(grow)
         grow &= keep & (edge[..., 3] > 0)
         if body is not None:
             grow = grow_into_band(edge, grow, ~keep)
@@ -247,10 +240,10 @@ def main():
     print(f"장식 바닥 {len(floor_decor)}개, 천장 {len(ceil_decor)}개")
 
     imgs = {
-        "ceilEdge": shrink(to_img(ceil_edge)),
-        "ceilBody": shrink(to_img(ceil_body)),
-        "floorEdge": shrink(to_img(floor_edge)),
-        "floorBody": shrink(to_img(floor_body)),
+        "ceilEdge": shrink(to_img(ceil_edge), K),
+        "ceilBody": shrink(to_img(ceil_body), K),
+        "floorEdge": shrink(to_img(floor_edge), K),
+        "floorBody": shrink(to_img(floor_body), K),
     }
     anchors = {
         "ceilEdge": [0, round(c_line * K)],
@@ -261,13 +254,13 @@ def main():
     for kind, lst, lip in (("floor", floor_decor, f_line - f_start), ("ceil", ceil_decor, c_line)):
         for i, (spr, cx, yend) in enumerate(lst):
             name = f"decor_{kind}{i}"
-            im = shrink(to_img(spr))
+            im = shrink(to_img(spr), K)
             imgs[name] = im
             anchors[name] = [im.width // 2, im.height if kind == "floor" else 0]
             dy = (lip - yend) if kind == "floor" else (yend - lip)
             decor[kind].append({"name": name, "x": round(cx * K, 1), "dy": round(dy * K, 1)})
 
-    # 예전 아틀라스의 작은 입자 그림을 옮겨 싣는다. 예전 그림은 640 기준이라 1440 기준으로 2.25배
+    # 지금 아틀라스의 작은 입자 그림을 옮겨 싣는다. res가 1440이면 그대로, res가 없는 640 기준 임시 그림이면 2.25배
     folder = ROOT / "public" / "assets" / "world" / args.theme
     old_def = json.loads((folder / "tiles.json").read_text(encoding="utf-8"))
     old_img = Image.open(folder / old_def["image"]).convert("RGBA")
@@ -304,11 +297,6 @@ def main():
             x += p.width + 2
         anims["particle"] = {"frames": frames, "fps": part.get("fps", 3), "anchor": [round(v * old_k) for v in part.get("anchor", [4, 4])]}
 
-    backup = ROOT / "art_inbox" / "out" / "placeholder_backup" / args.theme
-    backup.mkdir(parents=True, exist_ok=True)
-    if not (backup / "tiles.png").exists():
-        old_img.save(backup / "tiles.png")
-        (backup / "tiles.json").write_text(json.dumps(old_def, ensure_ascii=False, indent=2), encoding="utf-8")
     sheet.save(folder / "tiles.png")
     # 속 무늬를 깔기 시작하는 깊이, res 픽셀. 무늬 첫 줄이 원본에서 놓였던 깊이 그대로라 띠와 같은 그림이 겹친다
     body_gap = {"floor": round((f_body_start + 18 - f_line) * K, 1), "ceil": round((c_line - c_body_end) * K, 1)}

@@ -12,11 +12,10 @@
 import sys
 from pathlib import Path
 
-import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
+from artlib import key_crop, shrink  # noqa: E402
 from make_hud import faces_and_flags  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -28,11 +27,6 @@ RANDOM_SRC = INBOX / "random_sheet_v1.png"
 RANDOM_BOX = (128, 84, 608, 484)  # 물음표 솜뭉치가 놓인 자리: 원본 좌표 x0, y0, x1, y1
 SIZE = 96
 PAD = 2
-
-
-def shrink(img, k):
-    w, h = round(img.width * k), round(img.height * k)
-    return img.convert("RGBa").resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def place(img, k):
@@ -51,9 +45,7 @@ def main():
         por.save(ROOT / "public" / "assets" / "characters" / cid / "portrait.png")
         print(f"{cid}: 원본 {f.width}×{f.height} → {size[0]}×{size[1]}")
 
-    a = unkey(np.asarray(Image.open(RANDOM_SRC).convert("RGB").crop(RANDOM_BOX)))
-    rnd = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
-    rnd = rnd.crop(rnd.getbbox())
+    rnd = key_crop(RANDOM_SRC, RANDOM_BOX)
     avg_h = sum(f.height for f in faces.values()) / len(faces) * k
     kr = min(avg_h / rnd.height, room / rnd.width, room / rnd.height)
     por, size = place(rnd, kr)

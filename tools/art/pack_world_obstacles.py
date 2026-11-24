@@ -22,9 +22,9 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from import_scene import unkey  # noqa: E402
+from artlib import unkey, shrink, to_img, lum, dilate  # noqa: E402
 import paper_doll as pd  # noqa: E402
-from pack_concept import Packer, write_atlas, scaled, ASSETS, ROOT, WORLD_RES, ART_SCALE  # noqa: E402
+from pack_concept import Packer, write_atlas, ASSETS, ROOT, WORLD_RES, ART_SCALE  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -43,7 +43,7 @@ def objects(keyed, cell=4, reach=3, small=1500, attach=80):
     h, w = a.shape
     g = a[: h // cell * cell, : w // cell * cell].reshape(h // cell, cell, w // cell, cell).any((1, 3))
     for _ in range(reach):
-        g = pd.dilate(g)
+        g = dilate(g)
     found = []
     for m in pd.pieces_of(g):
         full = np.kron(m, np.ones((cell, cell), bool))
@@ -84,10 +84,6 @@ def crop(keyed, o):
     return arr
 
 
-def to_img(arr):
-    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
-
-
 def centroid(arr, alpha=128):
     ys, xs = np.nonzero(arr[..., 3] > alpha)
     return xs.mean(), ys.mean()
@@ -121,7 +117,7 @@ class Sheet:
     def add(self, name, arr, k, anchor, hit=None):
         """원본 1픽셀이 키우기 전 k 맵 단위가 되게 줄인다. anchor는 원본 픽셀 좌표"""
         s = k * ART_SCALE * PX
-        img = scaled(to_img(arr), s)
+        img = shrink(to_img(arr), s)
         rect = self.packer.add(img)
         a = {"frames": [rect], "anchor": [round(anchor[0] * s), round(anchor[1] * s)]}
         if hit:
@@ -137,17 +133,17 @@ def strip_stray(arr, max_h=12, max_area=1500):
     import paper_doll as pd
     a = arr.copy()
     op = a[..., 3] > 60
-    dark = op & (pd.lum(a) < 90)
+    dark = op & (lum(a) < 90)
     passable = ~dark
     out = np.zeros_like(passable)
     out[0, :], out[-1, :], out[:, 0], out[:, -1] = passable[0, :], passable[-1, :], passable[:, 0], passable[:, -1]
     while True:
-        nxt = pd.dilate(out) & passable
+        nxt = dilate(out) & passable
         if (nxt == out).all():
             break
         out = nxt
     n = 0
-    for m in pd.pieces_of(op & out & (pd.lum(a) > 110)):
+    for m in pd.pieces_of(op & out & (lum(a) > 110)):
         ys, _ = np.nonzero(m)
         if ys.max() - ys.min() + 1 <= max_h and m.sum() <= max_area:
             a[m] = 0
@@ -237,8 +233,8 @@ def pack_storm(keyed, sheet):
         ay = (min(y for y in range(h) if rw[y][2]) + sink) if top else (max(y for y in range(h) if rw[y][2]) - sink)
         # 수정 끝: 가운데 세로줄에서 어두운 외곽선이 있는 마지막 줄. 그 너머 밝은 전기 줄은 빼고 잰다
         band = arr[:, int(cx) - 6:int(cx) + 7]
-        lum = 0.3 * band[..., 0] + 0.59 * band[..., 1] + 0.11 * band[..., 2]
-        col = ((band[..., 3] > 200) & (lum < 110)).any(1)
+        light = lum(band)
+        col = ((band[..., 3] > 200) & (light < 110)).any(1)
         ys = np.nonzero(col)[0]
         tip = (ys.max() - ay) if top else (ay - ys.min())
         tips[name] = tip * k * ART_SCALE

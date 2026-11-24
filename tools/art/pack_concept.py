@@ -3,7 +3,8 @@
   public/assets/items/items.png, items.json          보석, 회복 고기, 깃털
   public/assets/world/cloud/obstacles.png, .json      떠 있는 바위, 가시 풍선
 
-크기는 지금 게임의 부딪힘 크기에 맞춘다. 시안 크기 그대로 키우는 것은 캐릭터 크기를 정한 뒤에 한다.
+크기는 게임의 부딪힘 크기에 맞추고, 카메라가 1.5배 당겨 보므로 res 1440으로 넣어 화면에서 1:1로 그려지게 한다.
+Packer, write_atlas는 다른 도구도 가져다 쓰고, icon_images는 make_hud.py가 쓴다.
 사용
   python tools/art/cut_concept.py
   python tools/art/pack_concept.py
@@ -16,6 +17,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artlib import unkey, shrink, to_img  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -23,7 +25,6 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[2]
 CUT = ROOT / "art_inbox" / "out" / "cut"
 ASSETS = ROOT / "public" / "assets"
-GAME_K = 960 / 1672  # 시안 1672×941 → 게임 960×540
 
 
 def load(name):
@@ -35,15 +36,8 @@ def trim(img):
     return img.crop(box) if box else img
 
 
-def scaled(img, k):
-    """알파를 곱한 상태로 줄여 가장자리에 하늘색이 번지지 않게 한다"""
-    w = max(1, round(img.width * k))
-    h = max(1, round(img.height * k))
-    return img.convert("RGBa").resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
-
-
 def to_width(img, w):
-    return scaled(img, w / img.width)
+    return shrink(img, w / img.width)
 
 
 class Packer:
@@ -131,7 +125,6 @@ ICON_BOX = 38  # 기술칸 안쪽에 들어가는 아이콘 최대 크기, 게�
 
 def icon_images():
     """ChatGPT 아이콘 시트를 칸마다 잘라 마젠타를 걷고 같은 크기 상자에 맞춘다"""
-    from import_scene import unkey
     src = ROOT / "art_inbox" / "icons_v1.webp"
     if not src.exists():
         return {}
@@ -149,9 +142,9 @@ def icon_images():
         y0, y1 = (0, split) if r == 0 else (split, h)
         x0, x1 = round(c * cw), round((c + 1) * cw)
         cell = keyed[y0:y1, x0:x1].copy()
-        img = trim(Image.fromarray(np.clip(cell, 0, 255).astype(np.uint8), "RGBA"))
+        img = trim(to_img(cell))
         k = ICON_BOX / max(img.width, img.height)
-        out[name] = scaled(img, k)
+        out[name] = shrink(img, k)
     return out
 
 

@@ -81,10 +81,10 @@ export class TitleScene {
       const sh = Math.ceil(w.sky.height * s);
       ctx.drawImage(w.sky, Math.round((cw - sw) / 2), ch - sh, sw, sh);
     }
-    for (const [img, f, k] of [[w.far, 0.25, w.k.far], [w.mid, 0.6, w.k.mid]]) {
+    for (const [img, f] of [[w.far, 0.25], [w.mid, 0.6]]) {
       if (!img) continue;
-      const iw = Math.round(img.width * k);
-      const ih = Math.round(img.height * k);
+      const iw = img.width;
+      const ih = img.height;
       const off = -(((Math.round(camX * f) % iw) + iw) % iw);
       for (let x = off; x < cw; x += iw) ctx.drawImage(img, x, ch - ih, iw, ih);
     }
